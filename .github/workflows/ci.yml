@@ -14,6 +14,8 @@ jobs:
     strategy:
       matrix:
         node-version: [18, 20, 22]
+    env:
+      GYP_MSVS_VERSION: 2022
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +25,23 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      - run: npm ci
+      - name: Check build tools
+        shell: pwsh
+        run: |
+          # Verify VS and Python for native module (winax) compilation
+          $vs = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2>$null
+          if ($vs) { Write-Output "VS found: $vs" } else { Write-Output "WARNING: VS not found" }
+          $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+          if ($py) { Write-Output "Python: $py" } else { Write-Output "WARNING: Python not found" }
+
+      - name: Install dependencies (skip native build)
+        run: npm ci --ignore-scripts
+
+      - name: Build native module (winax)
+        shell: pwsh
+        run: |
+          $nodeArch = if ([Environment]::Is64BitProcess) { "x64" } else { "x86" }
+          npx node-gyp rebuild --directory=node_modules/winax --arch=$nodeArch
 
       - name: Type check
         run: npx tsc --noEmit
