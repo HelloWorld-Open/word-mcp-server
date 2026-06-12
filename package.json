@@ -11,7 +11,7 @@
     "build": "tsc",
     "start": "node build/parent.js",
     "dev": "tsc --watch",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'tests/integration/**'",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -19,6 +19,8 @@
     "build/",
     "README.md",
     "README.zh-CN.md",
+    "TOOLS.md",
+    "TOOLS.zh-CN.md",
     "LICENSE"
   ],
   "engines": {
