@@ -1,0 +1,59 @@
+{
+  "name": "word-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for Microsoft Word document operations via COM automation",
+  "type": "module",
+  "main": "build/parent.js",
+  "bin": {
+    "word-mcp-server": "./build/parent.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/parent.js",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "files": [
+    "build/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "keywords": [
+    "mcp",
+    "word",
+    "docx",
+    "com",
+    "automation"
+  ],
+  "author": "HelloWorld-Open",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HelloWorld-Open/word-mcp-server"
+  },
+  "homepage": "https://github.com/HelloWorld-Open/word-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/HelloWorld-Open/word-mcp-server/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "winax": "^3.6.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.42",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8"
+  }
+}

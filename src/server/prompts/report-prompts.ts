@@ -1,0 +1,73 @@
+import { z } from "zod"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+
+export function registerReportPrompts(server: McpServer): void {
+  server.registerPrompt(
+    "create_report",
+    {
+      description: "Generate a step-by-step plan for creating a structured Word report",
+      argsSchema: {
+        title: z.string().describe("Report title"),
+        sections: z.string().describe("Comma-separated section headings"),
+        style: z.string().describe("Report style (professional, academic, casual)").default("professional"),
+      },
+    },
+    ({ title, sections, style }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Create a Word document report with the following specifications:
+
+Title: ${title}
+Sections: ${sections}
+Style: ${style}
+
+Use these tools in order:
+1. word_create — create the document with title "${title}"
+2. word_set_properties — set author and metadata
+3. word_set_page_setup — set margins and orientation
+4. For each section heading:
+   a. word_type_text — type the heading text
+   b. word_apply_style — apply "Heading 1" style
+   c. word_insert_paragraph — add spacing
+   d. word_type_text — type section content
+5. word_set_header — add header with report title
+6. word_set_footer — add page numbers
+7. word_save — save the document
+8. word_get_info — verify the document`,
+          },
+        },
+      ],
+    })
+  )
+
+  server.registerPrompt(
+    "format_document",
+    {
+      description: "Get a guided workflow for formatting an existing document",
+      argsSchema: {
+        style: z.string().describe("Target formatting style").default("professional"),
+      },
+    },
+    ({ style }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Reformat the current document with ${style} styling. Use these tools:
+
+1. word_select_all — select entire document
+2. word_set_font — set base font
+3. word_set_paragraph — set paragraph spacing and alignment
+4. word_set_page_setup — ensure consistent margins
+5. word_list_styles — check available styles
+6. word_set_properties — update metadata`,
+          },
+        },
+      ],
+    })
+  )
+}
