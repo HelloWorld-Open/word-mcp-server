@@ -20,7 +20,7 @@ MCP server for real-time Microsoft Word document manipulation via COM automation
 ## Prerequisites
 
 - Windows OS with Microsoft Word installed (Office 2016+)
-- Node.js 18+
+- Node.js 20+
 - MSVC Build Tools (required only during `npm install` to compile winax)
 
 ## Quick Start

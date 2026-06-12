@@ -29,7 +29,7 @@
 |------|---------|
 | 操作系统 | Windows（必须，因依赖 Word COM 组件） |
 | Microsoft Word | Office 2016 或更高版本 |
-| Node.js | 18+ |
+| Node.js | 20+ |
 | MSVC Build Tools | 仅在首次 `npm install` 时编译 winax 需要 |
 
 ## 快速开始
