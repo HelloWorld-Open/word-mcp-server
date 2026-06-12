@@ -26,10 +26,10 @@ jobs:
           cache: npm
 
       - name: Check build tools
+        continue-on-error: true
         shell: pwsh
         run: |
-          # Verify VS and Python for native module (winax) compilation
-          $vs = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2>$null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2>$null
           if ($vs) { Write-Output "VS found: $vs" } else { Write-Output "WARNING: VS not found" }
           $py = (Get-Command python -ErrorAction SilentlyContinue).Source
           if ($py) { Write-Output "Python: $py" } else { Write-Output "WARNING: Python not found" }
