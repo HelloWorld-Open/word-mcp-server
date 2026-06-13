@@ -90,7 +90,7 @@ Watch Word open and populate in real time — that's the whole point.
 
 ## 🎬 Demo
 
-<video src="./assets/demo/demo.mp4" controls width="800"></video>
+<video src="https://github.com/HelloWorld-Open/word-mcp-server/raw/main/assets/demo/demo.mp4" controls width="300"></video>
 
 ## ✨ Why Word MCP Server
 

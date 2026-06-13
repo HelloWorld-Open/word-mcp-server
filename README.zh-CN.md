@@ -90,7 +90,7 @@ Agent 会自动打开 Word、写入内容、排版表格、保存——全程实
 
 ## 🎬 演示视频
 
-<video src="./assets/demo/demo.mp4" controls width="800"></video>
+<video src="https://github.com/HelloWorld-Open/word-mcp-server/raw/main/assets/demo/demo.mp4" controls width="300"></video>
 
 ## ✨ 为什么选择 Word MCP Server
 
