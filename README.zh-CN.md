@@ -3,7 +3,7 @@
 # Word MCP Server
 
 <p align="center">
-  <a href="./assets/demo/demo.mp4">
+  <a href="https://raw.githubusercontent.com/HelloWorld-Open/word-mcp-server/main/assets/demo/demo.mp4">
     <img src="./assets/demo/thumbnail.png" alt="点击播放演示视频" width="300">
   </a>
 </p>
