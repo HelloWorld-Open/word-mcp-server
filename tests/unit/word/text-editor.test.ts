@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { WordTextEditor } from "../../../src/word/word-text-editor.js"
 import type { IWordSession } from "../../../src/word/session.js"
 
@@ -48,7 +48,6 @@ function createMockSession(mockDoc?: Record<string, unknown>): IWordSession {
     application: { Selection: sel, ScreenUpdating: true, ActiveDocument: doc } as Record<string, unknown>,
     activeDoc: doc,
     activeDocPath: null,
-    wasInNonBody: false,
     setActiveDoc: vi.fn(),
     setActiveDocPath: vi.fn(),
     ensureAlive: vi.fn(),
@@ -66,86 +65,7 @@ function createMockSession(mockDoc?: Record<string, unknown>): IWordSession {
   }
 }
 
-describe("WordTextEditor.splitIntoBatches", () => {
-  let editor: WordTextEditor
-
-  beforeEach(() => {
-    editor = new WordTextEditor(createMockSession())
-  })
-
-  it("returns single batch for short text without sentence enders", () => {
-    const batches = (editor as any).splitIntoBatches("hello world")
-    expect(batches).toEqual(["hello world"])
-  })
-
-  it("splits on Chinese period", () => {
-    const batches = (editor as any).splitIntoBatches("第一句。第二句。第三句")
-    expect(batches).toEqual(["第一句。", "第二句。", "第三句"])
-  })
-
-  it("splits on Chinese exclamation", () => {
-    const batches = (editor as any).splitIntoBatches("你好！再见！")
-    expect(batches).toEqual(["你好！", "再见！"])
-  })
-
-  it("splits on English period", () => {
-    const batches = (editor as any).splitIntoBatches("Hello. World. Done.")
-    expect(batches).toEqual(["Hello.", " World.", " Done."])
-  })
-
-  it("splits on English question mark", () => {
-    const batches = (editor as any).splitIntoBatches("A? B? C?")
-    expect(batches).toEqual(["A?", " B?", " C?"])
-  })
-
-  it("splits on newline", () => {
-    const batches = (editor as any).splitIntoBatches("line1\nline2\nline3")
-    expect(batches).toEqual(["line1\n", "line2\n", "line3"])
-  })
-
-  it("forces split at 500+ chars even without sentence enders", () => {
-    const longText = "a".repeat(503)
-    const batches = (editor as any).splitIntoBatches(longText)
-    expect(batches).toHaveLength(2)
-    expect(batches[0]).toHaveLength(501)
-    expect(batches[1]).toHaveLength(2)
-  })
-
-  it("handles empty string", () => {
-    const batches = (editor as any).splitIntoBatches("")
-    expect(batches).toEqual([""])
-  })
-})
-
 describe("WordTextEditor COM operations", () => {
-  it("typeText instant mode calls TypeText once", async () => {
-    const session = createMockSession()
-    const editor = new WordTextEditor(session)
-    const sel = (session.application as Record<string, unknown>).Selection as Record<string, unknown>
-    const typeTextSpy = sel.TypeText as ReturnType<typeof vi.fn>
-
-    await editor.typeText("hello world", "instant")
-
-    expect(typeTextSpy).toHaveBeenCalledTimes(1)
-    expect(typeTextSpy).toHaveBeenCalledWith("hello world")
-  })
-
-  it("typeText smooth mode splits into batches with delays", async () => {
-    const session = createMockSession()
-    const editor = new WordTextEditor(session)
-    const sel = (session.application as Record<string, unknown>).Selection as Record<string, unknown>
-    const typeTextSpy = sel.TypeText as ReturnType<typeof vi.fn>
-    const sleepSpy = vi.spyOn(editor as any, "sleep").mockResolvedValue(undefined)
-
-    await editor.typeText("A。B。C", "smooth")
-
-    expect(typeTextSpy).toHaveBeenCalledTimes(3)
-    expect(typeTextSpy.mock.calls[0][0]).toBe("A。")
-    expect(typeTextSpy.mock.calls[1][0]).toBe("B。")
-    expect(typeTextSpy.mock.calls[2][0]).toBe("C")
-    expect(sleepSpy).toHaveBeenCalledTimes(2)
-  })
-
   it("insertParagraph calls TypeParagraph N times", async () => {
     const session = createMockSession()
     const editor = new WordTextEditor(session)

@@ -70,7 +70,7 @@ describe.skipIf(process.platform !== "win32")("MCP Server smoke tests", () => {
     expect(list).toBeDefined()
     const tools = (list as any).result?.tools
     expect(tools).toBeDefined()
-    expect(tools.length).toBe(110)
+    expect(tools.length).toBe(113)
   })
 
   it("word tool names follow word_ prefix convention", async () => {

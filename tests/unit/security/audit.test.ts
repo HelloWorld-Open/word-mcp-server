@@ -4,13 +4,13 @@ import { logAudit } from "../../../src/security/audit.js"
 describe("audit", () => {
   it("should log OK entry", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {})
-    logAudit({ tool: "word_type_text", durationMs: 42 })
+    logAudit({ tool: "word_stream_block", durationMs: 42 })
 
     expect(spy).toHaveBeenCalledOnce()
     const msg = spy.mock.calls[0][0] as string
     expect(msg).toContain("[audit]")
     expect(msg).toContain("OK")
-    expect(msg).toContain("word_type_text")
+    expect(msg).toContain("word_stream_block")
     expect(msg).toContain("42ms")
 
     spy.mockRestore()
@@ -30,7 +30,7 @@ describe("audit", () => {
 
   it("should include sanitized args when provided", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {})
-    logAudit({ tool: "word_type_text", durationMs: 10, args: { text: "hello", size: 5 } })
+    logAudit({ tool: "word_stream_block", durationMs: 10, args: { text: "hello", size: 5 } })
 
     const msg = spy.mock.calls[0][0] as string
     expect(msg).toContain("hello")

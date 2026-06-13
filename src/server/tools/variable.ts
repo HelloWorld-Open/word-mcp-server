@@ -2,10 +2,12 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { VariableReplacer } from "../../word/variable-replacer.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 export function registerVariableTool(
   server: McpServer,
+  context: ServerContext,
   replacer: VariableReplacer,
   security: SecurityManager,
 ): void {
@@ -17,7 +19,7 @@ export function registerVariableTool(
         variables: z.record(z.string().min(1).max(100), z.string().max(100000)).describe("Key-value pairs: keys are variable names (without {{}}), values are replacement text"),
       },
     },
-    mcpCall(security, "word_replace_variables", async ({ variables }) => {
+    mcpCall(security, context, "word_replace_variables", async ({ variables }) => {
       const results = await replacer.replaceVariables(variables)
       const lines = results.map((r) => `- {{${r.key}}}: ${r.count} replacement(s)`)
       const total = results.reduce((s, r) => s + r.count, 0)

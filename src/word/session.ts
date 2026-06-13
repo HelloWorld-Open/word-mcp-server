@@ -11,7 +11,6 @@ export interface IWordSession {
   readonly application: Record<string, unknown>
   readonly activeDoc: Record<string, unknown> | null
   readonly activeDocPath: string | null
-  wasInNonBody: boolean
   setActiveDoc(doc: Record<string, unknown> | null): void
   setActiveDocPath(path: string | null): void
   ensureAlive(): void
@@ -38,7 +37,6 @@ export class WordSession implements IWordSession {
   private _activeDocPath: string | null = null
   private onLog: ((level: string, message: string) => void) | null = null
   private winaxMod: WinaxModule
-  private _wasInNonBody = false
   private _unhealthy = false
   private _recovering = false
   private monitor: ProcessMonitor
@@ -92,9 +90,6 @@ export class WordSession implements IWordSession {
   setActiveDocPath(path: string | null): void {
     this._activeDocPath = path
   }
-
-  get wasInNonBody(): boolean { return this._wasInNonBody }
-  set wasInNonBody(val: boolean) { this._wasInNonBody = val }
 
   markHealthy(): void {
     this._unhealthy = false
@@ -153,6 +148,14 @@ export class WordSession implements IWordSession {
       this._activeDoc = null
       this._activeDocPath = null
     }
+
+    // 强制清理 COM 退出后的残留 WINWORD.EXE
+    try {
+      const { execSync } = require("node:child_process") as { execSync: (cmd: string, opts: { timeout: number; stdio: string }) => Buffer }
+      execSync("taskkill /F /IM WINWORD.EXE", { timeout: 5000, stdio: "ignore" })
+    } catch (e) {
+      this.onLog?.("warn", `Force-kill WINWORD.EXE failed (normal if already exited): ${e}`)
+    }
   }
 
   healthCheck(): boolean {
@@ -173,8 +176,6 @@ export class WordSession implements IWordSession {
       return true
     } catch {
       this.word = null
-      this._activeDoc = null
-      this._activeDocPath = null
       this._unhealthy = true
       return false
     }

@@ -60,7 +60,7 @@ export class PositionMap {
 
   private getDoc(): Record<string, unknown> {
     const doc = this.session.activeDoc ?? (this.session.application as Record<string, unknown>).ActiveDocument as Record<string, unknown> | undefined
-    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document or word_create first.")
+    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document or word_stream_start first.")
     return doc
   }
 
@@ -117,28 +117,28 @@ export class PositionMap {
 
     for (const fmt of styleFormats) {
       for (let level = 1; level <= 9; level++) {
-        ;(find.ClearFormatting as () => void)()
         try {
+          ;(find.ClearFormatting as () => void)()
           find.Style = fmt(level)
-        } catch { continue }
-        find.Text = ""
-        find.Forward = true
-        find.Wrap = 0
+          find.Text = ""
+          find.Forward = true
+          find.Wrap = 0
 
-        ;(sel.HomeKey as (u: number) => void)(6)
+          ;(sel.HomeKey as (u: number) => void)(6)
 
-        while (true) {
-          const found = (find.Execute as (...a: unknown[]) => boolean)(
-            "", false, false, false, false, false, true, 0, true, "", 0
-          )
-          if (!found) break
-          const start = sel.Start as number
-          const pi = binarySearchPara(start)
-          if (!headingSet.has(pi) && pi >= 1 && pi <= count) {
-            headingSet.add(pi)
-            headingEntries.push({ pi, level })
+          while (true) {
+            const found = (find.Execute as (...a: unknown[]) => boolean)(
+              "", false, false, false, false, false, true, 0, true, "", 0
+            )
+            if (!found) break
+            const start = sel.Start as number
+            const pi = binarySearchPara(start)
+            if (!headingSet.has(pi) && pi >= 1 && pi <= count) {
+              headingSet.add(pi)
+              headingEntries.push({ pi, level })
+            }
           }
-        }
+        } catch { /* skip this heading level */ }
       }
     }
 
@@ -236,22 +236,24 @@ export class PositionMap {
 
   private async resolveParagraph(locator: ParagraphLocator): Promise<ResolvedPosition> {
     const doc = this.getDoc()
-    const paras = doc.Paragraphs as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const count = paras.Count as number
+    const count = (doc.Paragraphs as { Count: number }).Count as number
 
     const candidates: number[] = []
     const matchText = locator.match
     if (matchText) {
       const mode = locator.matchMode ?? "contains"
-      for (let i = 1; i <= count; i++) {
-        const p = paras.Item(i)
-        const text = ((p.Range as Record<string, unknown>).Text as string ?? "").replace(/\r?\n$/, "")
+      const fullText = (doc.Content as Record<string, unknown>).Text as string
+      const rawTexts = fullText.split('\r')
+      if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
+      const allTexts = rawTexts.slice(0, count)
+      for (let i = 0; i < allTexts.length; i++) {
+        const text = allTexts[i].replace(/\r?\n$/, "")
         if (mode === "contains" && text.includes(matchText)) {
-          candidates.push(i)
+          candidates.push(i + 1)
         } else if (mode === "regex") {
           try {
             const re = new RegExp(matchText)
-            if (re.test(text)) candidates.push(i)
+            if (re.test(text)) candidates.push(i + 1)
           } catch {
             return { found: false, paragraphIndex: 0, headingContext: null, error: `Invalid regex: ${matchText}` }
           }
@@ -297,15 +299,30 @@ export class PositionMap {
       if ((b.Name as string) === locator.name) {
         const range = b.Range as Record<string, unknown>
         const start = range.Start as number
-        const paras = doc.Paragraphs as { Count: number; Item: (i: number) => Record<string, unknown> }
-        const paraCount = paras.Count as number
-        for (let pi = 1; pi <= paraCount; pi++) {
-          const p = paras.Item(pi)
-          const pRange = p.Range as Record<string, unknown>
-          if (start >= (pRange.Start as number) && start < (pRange.End as number)) {
-            const base = this.applyOffset(pi, locator.offset)
-            const ctx = this.getHeadingContext(base.paragraphIndex)
-            return { ...base, headingContext: ctx ?? base.headingContext }
+        const paraCount = (doc.Paragraphs as { Count: number }).Count as number
+        const fullText = (doc.Content as Record<string, unknown>).Text as string
+        const rawTexts = fullText.split('\r')
+        if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
+        const allTexts = rawTexts.slice(0, paraCount)
+        const paraStarts = new Array(paraCount + 2)
+        let textPos = 0
+        for (let i = 1; i <= paraCount; i++) {
+          paraStarts[i] = textPos
+          textPos += allTexts[i - 1].length + 1
+        }
+        paraStarts[paraCount + 1] = fullText.length
+        let lo = 1, hi = paraCount
+        while (lo <= hi) {
+          const mid = Math.floor((lo + hi) / 2)
+          if (start >= paraStarts[mid]) {
+            if (mid >= paraCount || start < paraStarts[mid + 1]) {
+              const base = this.applyOffset(mid, locator.offset)
+              const ctx = this.getHeadingContext(base.paragraphIndex)
+              return { ...base, headingContext: ctx ?? base.headingContext }
+            }
+            lo = mid + 1
+          } else {
+            hi = mid - 1
           }
         }
         const base = this.applyOffset(1, locator.offset)

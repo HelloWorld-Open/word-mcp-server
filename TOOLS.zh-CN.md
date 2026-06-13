@@ -2,7 +2,7 @@
 
 # Word MCP Server — 工具参考
 
-> 110+ 个工具，涵盖 12 个模块。
+> 108 个工具，涵盖 12 个模块。
 
 ---
 
@@ -12,8 +12,6 @@
 |------|------|
 | `word_get_status` | 查询当前 Word/文档状态（NO_WORD/NO_DOC/DOC_ACTIVE/DIALOG） |
 | `word_document` | 通用文档入口：按路径打开或使用当前文档 |
-| `word_create` | 创建新文档（可见窗口） |
-| `word_create_from_template` | 从 .dotx 模板创建新文档 |
 | `word_open` | 打开已有 .docx 文件 |
 | `word_save` | 保存当前文档（自动 .bak 备份） |
 | `word_save_as` | 另存为新文件（自动适配格式） |
@@ -26,7 +24,6 @@
 
 | 工具 | 描述 |
 |------|------|
-| `word_type_text` | 在光标位置输入文字（smooth/instant） |
 | `word_insert_paragraph` | 插入段落换行 |
 | `word_insert_page_break` | 插入分页符 |
 | `word_insert_horizontal_line` | 插入水平分割线 |
@@ -35,7 +32,6 @@
 | `word_insert_section_break` | 插入分节符 |
 | `word_insert_file` | 在光标处插入另一个 .docx 文件内容 |
 | `word_backspace` | 删除光标前字符 |
-| `word_write_markdown` | Markdown 写入格式化内容（标题/粗体/斜体/删除线/代码/链接/列表/表格/引用/分隔线） |
 | `word_get_text` | 读取全文文本 |
 | `word_get_paragraph` | 读取指定段落文本 |
 | `word_get_table_data` | 提取表格内容为结构化数据 |
@@ -44,6 +40,14 @@
 | `word_get_lists` | 列出所有列表（含层级） |
 | `word_get_sections` | 列出所有节及页面设置 |
 | `word_export_to_pdf` | 导出为 PDF |
+
+### 📤 流式文档（推荐内容写入方式）
+
+| 工具 | 描述 |
+|------|------|
+| `word_stream_start` | 启动流式会话：创建文档，配置页面设置、基础样式（`baseStyleProfile` 支持按样式名预设字体/段落格式）和模板 |
+| `word_stream_block` | 写入 Markdown 内容块（Word 中即时预览），支持标题/粗体/斜体/列表/表格/代码块/引用/链接 |
+| `word_stream_end` | 结束流式会话：保存文档，可选导出 PDF，返回块数/字符数/耗时 |
 
 ### 🔗 链接、引用与批注
 
@@ -88,6 +92,10 @@
 | `word_set_page_setup` | 页面设置（边距/方向/纸张） |
 | `word_set_properties` | 设置文档属性（标题/作者/主题/关键词） |
 | `word_list_styles` | 列出可用样式 |
+| `word_set_body_indent` | 为所有"正文"段落设置首行缩进（中文学术论文） |
+| `word_set_track_changes` | 开启/关闭修订模式 |
+| `word_accept_changes` | 接受文档中所有修订 |
+| `word_reject_changes` | 拒绝文档中所有修订 |
 
 ### 📊 表格
 
@@ -130,29 +138,17 @@
 | `word_add_bookmark` | 添加书签 |
 | `word_set_watermark` | 设置/移除水印 |
 
-### ⚡ 批处理模式
-
-| 工具 | 描述 |
-|------|------|
-| `word_batch_start` | 开启批处理（禁用重绘，加速 3-10 倍） |
-| `word_batch_end` | 结束批处理（恢复重绘并刷新） |
-
 ### 🏗️ Manager 层（高层 API）
 
 | 工具 | 描述 |
 |------|------|
-| `word_mgr_create_document` | 创建文档（自动关闭上一个 + 页面设置） |
-| `word_mgr_write_content` | 写入 Markdown（自动管理光标和重绘开关） |
-| `word_mgr_apply_heading` | 在文档末尾应用标题样式 |
 | `word_mgr_set_header` / `word_mgr_set_footer` | 设置页眉/页脚（自动返回正文） |
 | `word_mgr_set_page_numbers` | 插入页码（自动返回正文） |
 | `word_mgr_insert_table` / `word_mgr_insert_chart` / `word_mgr_insert_image` | 插入元素（自动段落分隔） |
-| `word_mgr_insert_list` / `word_mgr_insert_textbox` | 插入列表/文本框（自动复位光标） |
+| `word_mgr_insert_textbox` | 插入文本框（自动复位光标） |
 | `word_mgr_add_bookmark` / `word_mgr_add_comment` / `word_mgr_add_footnote` / `word_mgr_add_hyperlink` | 添加标记（自动深度复位光标） |
 | `word_mgr_insert_section_break` | 分节符（自动返回正文） |
-| `word_mgr_format_page` | 一键页面布局设置 |
 | `word_mgr_set_watermark` | 水印（自动返回正文） |
-| `word_mgr_save` | 保存（可选同时导出 PDF） |
 
 ### 🧭 语义定位
 
@@ -160,8 +156,7 @@
 |------|------|
 | `word_locate` | 解析标题/段落/表格/书签位置（只读） |
 | `word_select_at` | 按语义位置移动光标 |
-| `word_insert_at` | 在语义位置写入文本 |
-| `word_write_markdown_at` | 在语义位置写入 Markdown |
+| `word_insert_at` | 在语义位置写入 Markdown |
 | `word_edit_cell_at` | 在语义位置编辑表格单元格 |
 
 ### 🔄 变量替换

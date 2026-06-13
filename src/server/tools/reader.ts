@@ -2,10 +2,12 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordDocument } from "../../word/document.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 export function registerReaderTools(
   server: McpServer,
+  context: ServerContext,
   docOps: WordDocument,
   security: SecurityManager,
 ): void {
@@ -14,10 +16,9 @@ export function registerReaderTools(
     {
       description: "Get the full text content of the current document. WHEN: need to read what's written, verify content, or analyze text. NOT: need structure/headings? use word_get_structure.",
     },
-    mcpCall(security, "word_get_text", async () => {
-      const info = await docOps.getInfo()
+    mcpCall(security, context, "word_get_text", async () => {
       const text = await docOps.getFullText()
-      return `--- "${info.name}" (${info.wordCount} words, ${info.paragraphCount} paragraphs) ---\n${text}`
+      return text
     }),
   )
 
@@ -29,10 +30,9 @@ export function registerReaderTools(
         index: z.number().int().positive().describe("Paragraph index (1-based). Use word_get_structure() to find heading paragraph indices."),
       },
     },
-    mcpCall(security, "word_get_paragraph", async ({ index }) => {
-      const info = await docOps.getInfo()
+    mcpCall(security, context, "word_get_paragraph", async ({ index }) => {
       const text = await docOps.getParagraphText(index)
-      return `Action: Paragraph ${index} of ${info.paragraphCount}\nDetail: "${text.slice(0, 200)}${text.length > 200 ? "..." : ""}"\nNext: word_get_paragraph({index:${index + 1}}) or word_get_text()`
+      return `Action: Paragraph ${index}\nDetail: "${text.slice(0, 200)}${text.length > 200 ? "..." : ""}"\nNext: word_get_paragraph({index:${index + 1}}) or word_get_text()`
     }),
   )
 
@@ -44,7 +44,7 @@ export function registerReaderTools(
         path: z.string().min(1).max(4096).optional().describe("Output PDF path (default: same name as source document with .pdf extension)"),
       },
     },
-    mcpCall(security, "word_export_to_pdf", async ({ path }) => {
+    mcpCall(security, context, "word_export_to_pdf", async ({ path }) => {
       let outputPath = path
       if (!outputPath) {
         const info = await docOps.getInfo()
@@ -68,7 +68,7 @@ export function registerReaderTools(
         index: z.number().int().positive().default(1).describe("Table index (1-based). Use word_get_info to check table count."),
       },
     },
-    mcpCall(security, "word_get_table_data", async ({ index }) => {
+    mcpCall(security, context, "word_get_table_data", async ({ index }) => {
       const result = await docOps.getTableData(index)
       const header = `Table ${index} of ${result.tableCount} (${result.rows} rows × ${result.columns} columns)`
       const lines = result.data.map((row, ri) =>
@@ -86,7 +86,7 @@ export function registerReaderTools(
     {
       description: "List all comments in the document. WHEN: need to review existing comments. NOT: want to add a comment? use word_add_comment.",
     },
-    mcpCall(security, "word_get_comments", async () => {
+    mcpCall(security, context, "word_get_comments", async () => {
       const comments = await docOps.getComments()
       if (comments.length === 0) {
         return `Action: No comments found\nDetail: The document has no comments`
@@ -102,7 +102,7 @@ export function registerReaderTools(
     {
       description: "List all bookmarks in the document. WHEN: need to see available bookmarks for navigation. NOT: want to add a bookmark? use word_add_bookmark.",
     },
-    mcpCall(security, "word_get_bookmarks", async () => {
+    mcpCall(security, context, "word_get_bookmarks", async () => {
       const bookmarks = await docOps.getBookmarks()
       if (bookmarks.length === 0) {
         return `Action: No bookmarks found\nDetail: The document has no bookmarks`
@@ -118,7 +118,7 @@ export function registerReaderTools(
     {
       description: "List all bullet and numbered lists in the document with hierarchy. WHEN: need to review list structure or verify list content. NOT: want raw text? use word_get_text.",
     },
-    mcpCall(security, "word_get_lists", async () => {
+    mcpCall(security, context, "word_get_lists", async () => {
       const result = await docOps.getLists()
       if (result.listCount === 0) {
         return `Action: No lists found\nDetail: The document has no lists`
@@ -142,7 +142,7 @@ export function registerReaderTools(
     {
       description: "List all sections with page setup info (orientation, columns, page size). WHEN: need to understand document layout or section boundaries. NOT: need heading structure? use word_get_structure.",
     },
-    mcpCall(security, "word_get_sections", async () => {
+    mcpCall(security, context, "word_get_sections", async () => {
       const result = await docOps.getSections()
       const lines = result.sections.map(s =>
         `  Section ${s.index}: ${s.orientation}, ${s.columnCount} column(s), ${s.pageWidth.toFixed(0)}×${s.pageHeight.toFixed(0)}pt`

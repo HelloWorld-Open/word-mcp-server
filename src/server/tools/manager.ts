@@ -1,60 +1,22 @@
 import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SecurityManager } from "../../security/policy.js"
-import { WordDocumentManager } from "../../manager/word-manager.js"
+import type { ServerContext } from "../server-context.js"
+import type { WordTableEditor } from "../../word/word-table-editor.js"
+import type { WordMediaEditor } from "../../word/word-media-editor.js"
+import type { WordDocumentStructure } from "../../word/word-document-structure.js"
+import type { WordTextEditor } from "../../word/word-text-editor.js"
 import { mcpCall } from "./helper.js"
 
 export function registerManagerTools(
   server: McpServer,
-  mgr: WordDocumentManager,
+  context: ServerContext,
+  tableEditor: WordTableEditor,
+  mediaEditor: WordMediaEditor,
+  documentStructure: WordDocumentStructure,
+  textEditor: WordTextEditor,
   security: SecurityManager,
 ): void {
-  server.registerTool(
-    "word_mgr_create_document",
-    {
-      description: "Create a new document with optional page setup in one call — Phase 1 INIT — Automatically closes any active document first.",
-      inputSchema: {
-        title: z.string().max(255).optional().describe("Document title"),
-        author: z.string().max(255).optional().describe("Document author"),
-        topMargin: z.number().min(0).max(100).optional().describe("Top margin in cm"),
-        bottomMargin: z.number().min(0).max(100).optional().describe("Bottom margin in cm"),
-        leftMargin: z.number().min(0).max(100).optional().describe("Left margin in cm"),
-        rightMargin: z.number().min(0).max(100).optional().describe("Right margin in cm"),
-        orientation: z.enum(["portrait", "landscape"]).optional().describe("Page orientation"),
-      },
-    },
-    mcpCall(security, "word_mgr_create_document", async (args) => {
-      return await mgr.createDocument(args)
-    }, { preconditions: [] }),
-  )
-
-  server.registerTool(
-    "word_mgr_write_content",
-    {
-      description: "Write formatted Markdown content and auto-reset cursor — Phase 2 MAIN — 80%+ body content in one call — Handles cursor reset automatically.",
-      inputSchema: {
-        text: z.string().min(1).max(100000).describe("Markdown content (headings, bold, italic, lists, tables, code)"),
-      },
-    },
-    mcpCall(security, "word_mgr_write_content", async (args) => {
-      return await mgr.writeContent(args)
-    }),
-  )
-
-  server.registerTool(
-    "word_mgr_apply_heading",
-    {
-      description: "Apply a heading at end of document with auto cursor reset — Phase 2 MAIN — Writes text, applies style, inserts paragraph.",
-      inputSchema: {
-        text: z.string().min(1).max(1000).describe("Heading text"),
-        level: z.number().int().min(1).max(9).describe("Heading level (1-9)"),
-      },
-    },
-    mcpCall(security, "word_mgr_apply_heading", async ({ text, level }) => {
-      return await mgr.applyHeading(text, level)
-    }),
-  )
-
   server.registerTool(
     "word_mgr_insert_table",
     {
@@ -66,8 +28,9 @@ export function registerManagerTools(
         autoFitBehavior: z.enum(["fixed", "contents", "window"]).optional().describe("Auto-fit behavior"),
       },
     },
-    mcpCall(security, "word_mgr_insert_table", async (args) => {
-      return await mgr.insertTable(args)
+    mcpCall(security, context, "word_mgr_insert_table", async (args) => {
+      const result = await tableEditor.insertTable(args)
+      return `Table created: ${result.rows}x${result.columns}`
     }),
   )
 
@@ -83,8 +46,9 @@ export function registerManagerTools(
         height: z.number().min(1).max(1000).optional().describe("Height in points"),
       },
     },
-    mcpCall(security, "word_mgr_insert_chart", async (args) => {
-      return await mgr.insertChart(args)
+    mcpCall(security, context, "word_mgr_insert_chart", async (args) => {
+      const result = await mediaEditor.insertChart(args)
+      return `Chart inserted (${result.type}, ${result.series} series)`
     }),
   )
 
@@ -98,26 +62,13 @@ export function registerManagerTools(
         height: z.number().min(1).max(1000).optional().describe("Height in points"),
       },
     },
-    mcpCall(security, "word_mgr_insert_image", async (args) => {
-      const safeArgs = {
-        ...args,
+    mcpCall(security, context, "word_mgr_insert_image", async (args) => {
+      await mediaEditor.insertImage({
         imagePath: security.pathSanitizer.resolveAndValidate(args.imagePath),
-      }
-      return await mgr.insertImage(safeArgs)
-    }),
-  )
-
-  server.registerTool(
-    "word_mgr_insert_list",
-    {
-      description: "Insert a bullet or numbered list with auto cursor reset — Phase 4 ELEMENTS.",
-      inputSchema: {
-        type: z.enum(["bullet", "number"]).describe("List type"),
-        items: z.array(z.string().max(100000)).min(1).max(500).describe("List items"),
-      },
-    },
-    mcpCall(security, "word_mgr_insert_list", async (args) => {
-      return await mgr.insertList(args)
+        width: args.width as number | undefined,
+        height: args.height as number | undefined,
+      })
+      return "Image inserted"
     }),
   )
 
@@ -132,8 +83,9 @@ export function registerManagerTools(
         orientation: z.enum(["horizontal", "vertical"]).optional().describe("Text orientation"),
       },
     },
-    mcpCall(security, "word_mgr_insert_textbox", async (args) => {
-      return await mgr.insertTextbox(args)
+    mcpCall(security, context, "word_mgr_insert_textbox", async (args) => {
+      const result = await mediaEditor.insertTextbox(args)
+      return `Textbox inserted (${result.width}x${result.height})`
     }),
   )
 
@@ -146,8 +98,9 @@ export function registerManagerTools(
         alignment: z.enum(["left", "center", "right"]).optional().describe("Header alignment"),
       },
     },
-    mcpCall(security, "word_mgr_set_header", async (args) => {
-      return await mgr.setHeader(args)
+    mcpCall(security, context, "word_mgr_set_header", async (args) => {
+      await documentStructure.setHeader(args.text, args.alignment)
+      return "Header set"
     }),
   )
 
@@ -160,8 +113,9 @@ export function registerManagerTools(
         alignment: z.enum(["left", "center", "right"]).optional().describe("Footer alignment"),
       },
     },
-    mcpCall(security, "word_mgr_set_footer", async (args) => {
-      return await mgr.setFooter(args)
+    mcpCall(security, context, "word_mgr_set_footer", async (args) => {
+      await documentStructure.setFooter(args.text, args.alignment)
+      return "Footer set"
     }),
   )
 
@@ -171,10 +125,12 @@ export function registerManagerTools(
       description: "Add page numbers with auto context return — Phase 3 GLOBAL — Adds page number field then returns cursor.",
       inputSchema: {
         target: z.enum(["header", "footer"]).describe("Where to place page numbers"),
+        alignment: z.enum(["left", "center", "right"]).optional().describe("Page number alignment (default: center)"),
       },
     },
-    mcpCall(security, "word_mgr_set_page_numbers", async ({ target }) => {
-      return await mgr.setPageNumbers(target)
+    mcpCall(security, context, "word_mgr_set_page_numbers", async ({ target, alignment }) => {
+      await documentStructure.setPageNumbers(target, alignment)
+      return "Page numbers added"
     }),
   )
 
@@ -186,8 +142,9 @@ export function registerManagerTools(
         text: z.string().min(1).max(100).describe("Watermark text (e.g. DRAFT, CONFIDENTIAL)"),
       },
     },
-    mcpCall(security, "word_mgr_set_watermark", async ({ text }) => {
-      return await mgr.setWatermark(text)
+    mcpCall(security, context, "word_mgr_set_watermark", async ({ text }) => {
+      await documentStructure.setWatermark({ text })
+      return "Watermark set"
     }),
   )
 
@@ -199,8 +156,9 @@ export function registerManagerTools(
         name: z.string().min(1).max(100).regex(/^[a-zA-Z_\u4e00-\u9fff][a-zA-Z0-9_\u4e00-\u9fff]*$/).describe("Bookmark name (alphanumeric + underscore, start with letter/Chinese)"),
       },
     },
-    mcpCall(security, "word_mgr_add_bookmark", async (args) => {
-      return await mgr.addBookmark(args)
+    mcpCall(security, context, "word_mgr_add_bookmark", async (args) => {
+      await documentStructure.addBookmark(args.name)
+      return "Bookmark added"
     }),
   )
 
@@ -212,8 +170,9 @@ export function registerManagerTools(
         text: z.string().min(1).max(10000).describe("Comment text"),
       },
     },
-    mcpCall(security, "word_mgr_add_comment", async (args) => {
-      return await mgr.addComment(args)
+    mcpCall(security, context, "word_mgr_add_comment", async (args) => {
+      await documentStructure.addComment(args.text)
+      return "Comment added"
     }),
   )
 
@@ -225,8 +184,9 @@ export function registerManagerTools(
         text: z.string().min(1).max(10000).describe("Footnote text"),
       },
     },
-    mcpCall(security, "word_mgr_add_footnote", async (args) => {
-      return await mgr.addFootnote(args)
+    mcpCall(security, context, "word_mgr_add_footnote", async (args) => {
+      await textEditor.addFootnote(args.text)
+      return "Footnote added"
     }),
   )
 
@@ -241,8 +201,9 @@ export function registerManagerTools(
         screenTip: z.string().max(500).optional().describe("Tooltip on hover"),
       },
     },
-    mcpCall(security, "word_mgr_add_hyperlink", async (args) => {
-      return await mgr.addHyperlink(args)
+    mcpCall(security, context, "word_mgr_add_hyperlink", async (args) => {
+      await textEditor.addHyperlink(args.text, args.address, args.subAddress, args.screenTip)
+      return "Hyperlink added"
     }),
   )
 
@@ -254,54 +215,10 @@ export function registerManagerTools(
         type: z.enum(["nextPage", "continuous", "evenPage", "oddPage"]).optional().describe("Section break type (default: nextPage)"),
       },
     },
-    mcpCall(security, "word_mgr_insert_section_break", async (args) => {
-      return await mgr.insertSectionBreak(args)
+    mcpCall(security, context, "word_mgr_insert_section_break", async (args) => {
+      await textEditor.insertSectionBreak(args.type)
+      return "Section break inserted"
     }),
   )
 
-  server.registerTool(
-    "word_mgr_format_page",
-    {
-      description: "Format page layout (margins, orientation, size) — Phase 1 INIT.",
-      inputSchema: {
-        topMargin: z.number().min(0).max(100).optional().describe("Top margin in cm"),
-        bottomMargin: z.number().min(0).max(100).optional().describe("Bottom margin in cm"),
-        leftMargin: z.number().min(0).max(100).optional().describe("Left margin in cm"),
-        rightMargin: z.number().min(0).max(100).optional().describe("Right margin in cm"),
-        orientation: z.enum(["portrait", "landscape"]).optional().describe("Page orientation"),
-        pageWidth: z.number().min(5).max(100).optional().describe("Page width in cm"),
-        pageHeight: z.number().min(5).max(100).optional().describe("Page height in cm"),
-      },
-    },
-    mcpCall(security, "word_mgr_format_page", async (args) => {
-      return await mgr.formatPage(args)
-    }),
-  )
-
-  server.registerTool(
-    "word_mgr_save",
-    {
-      description: "Save the document (and optionally export to PDF) — Phase 6 FINISH.",
-      inputSchema: {
-        exportPath: z.string().max(4096).optional().describe("Optional PDF export path"),
-      },
-    },
-    mcpCall(security, "word_mgr_save", async ({ exportPath }) => {
-      const safePath = exportPath ? security.pathSanitizer.validateForWrite(exportPath) : undefined
-      return await mgr.saveAndExport(safePath)
-    }),
-  )
-
-  server.registerTool(
-    "word_mgr_close",
-    {
-      description: "Close the current document with optional save — Phase 6 FINISH.",
-      inputSchema: {
-        save: z.boolean().optional().describe("Save before closing (default: false)"),
-      },
-    },
-    mcpCall(security, "word_mgr_close", async ({ save }) => {
-      return await mgr.closeDocument(save ?? false)
-    }),
-  )
 }

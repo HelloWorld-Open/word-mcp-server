@@ -25,18 +25,13 @@ Sections: ${sections}
 Style: ${style}
 
 Use these tools in order:
-1. word_create — create the document with title "${title}"
+1. word_stream_start — create the document with title "${title}"
 2. word_set_properties — set author and metadata
-3. word_set_page_setup — set margins and orientation
-4. For each section heading:
-   a. word_type_text — type the heading text
-   b. word_apply_style — apply "Heading 1" style
-   c. word_insert_paragraph — add spacing
-   d. word_type_text — type section content
-5. word_set_header — add header with report title
-6. word_set_footer — add page numbers
-7. word_save — save the document
-8. word_get_info — verify the document`,
+3. word_stream_block — write all section content as markdown
+4. word_mgr_set_header — add header with report title
+5. word_mgr_set_page_numbers — add page numbers
+6. word_stream_end — save the document
+7. word_get_info — verify the document`,
           },
         },
       ],

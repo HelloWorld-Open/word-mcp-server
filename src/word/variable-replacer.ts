@@ -1,16 +1,6 @@
-import type { IWordSession } from "./session.js"
-import { WordMcpError } from "../security/errors.js"
+import { WordBase } from "./word-base.js"
 
-export class VariableReplacer {
-  constructor(private session: IWordSession) {}
-
-  private requireDoc(): Record<string, unknown> {
-    const app = this.session.application as Record<string, unknown>
-    const doc = this.session.activeDoc ?? (app.ActiveDocument as Record<string, unknown>)
-    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_create to create a new document.")
-    return doc
-  }
-
+export class VariableReplacer extends WordBase {
   async replaceVariables(variables: Record<string, string>): Promise<{ key: string; count: number }[]> {
     const doc = this.requireDoc()
     const results: { key: string; count: number }[] = []

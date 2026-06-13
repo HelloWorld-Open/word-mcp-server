@@ -2,10 +2,12 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordDocumentStructure } from "../../word/word-document-structure.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 export function registerStructureTools(
   server: McpServer,
+  context: ServerContext,
   content: WordDocumentStructure,
   security: SecurityManager,
 ): void {
@@ -18,7 +20,7 @@ export function registerStructureTools(
         alignment: z.enum(["left", "center", "right"]).optional().describe("Header alignment"),
       },
     },
-    mcpCall(security, "word_set_header", async ({ text, alignment }) => {
+    mcpCall(security, context, "word_set_header", async ({ text, alignment }) => {
       await content.setHeader(text, alignment)
       return `Action: Header set\nDetail: Alignment: ${alignment ?? "left"}\nNext: word_set_footer({text:"Page "}) or word_set_page_numbers({target:"footer"})`
     }),
@@ -33,7 +35,7 @@ export function registerStructureTools(
         alignment: z.enum(["left", "center", "right"]).optional().describe("Footer alignment"),
       },
     },
-    mcpCall(security, "word_set_footer", async ({ text, alignment }) => {
+    mcpCall(security, context, "word_set_footer", async ({ text, alignment }) => {
       await content.setFooter(text, alignment)
       return `Action: Footer set\nDetail: Alignment: ${alignment ?? "left"}\nNext: word_set_header({text:"..."}) or word_set_page_numbers({target:"footer"})`
     }),
@@ -45,11 +47,12 @@ export function registerStructureTools(
       description: "Add page numbers to header or footer.",
       inputSchema: {
         target: z.enum(["header", "footer"]).describe("Where to place page numbers"),
+        alignment: z.enum(["left", "center", "right"]).optional().describe("Page number alignment (default: center)"),
       },
     },
-    mcpCall(security, "word_set_page_numbers", async ({ target }) => {
-      await content.setPageNumbers(target)
-      return `Action: Page numbers added to ${target}\nNext: word_set_header({text:"... - Page "}) for custom text alongside numbers`
+    mcpCall(security, context, "word_set_page_numbers", async ({ target, alignment }) => {
+      await content.setPageNumbers(target, alignment)
+      return `Action: Page numbers added to ${target} (${alignment ?? "center"})\nNext: word_set_header({text:"... - Page "}) for custom text alongside numbers`
     }),
   )
 
@@ -58,7 +61,7 @@ export function registerStructureTools(
     {
       description: "Insert a Table of Contents at the cursor position.",
     },
-    mcpCall(security, "word_insert_toc", async () => {
+    mcpCall(security, context, "word_insert_toc", async () => {
       await content.insertToc()
       return "Action: Table of Contents inserted\nNext: Right-click the TOC > Update Field to refresh after adding headings"
     }),
@@ -72,7 +75,7 @@ export function registerStructureTools(
         name: z.string().min(1).max(100).regex(/^[a-zA-Z_\u4e00-\u9fff][a-zA-Z0-9_\u4e00-\u9fff]*$/).describe("Bookmark name (alphanumeric + underscore, start with letter/Chinese)"),
       },
     },
-    mcpCall(security, "word_add_bookmark", async ({ name }) => {
+    mcpCall(security, context, "word_add_bookmark", async ({ name }) => {
       await content.addBookmark(name)
       return `Action: Bookmark added "${name}"\nNext: word_add_hyperlink with subAddress="${name}" to link here`
     }),
@@ -86,7 +89,7 @@ export function registerStructureTools(
         text: z.string().min(1).max(10000).describe("Comment text"),
       },
     },
-    mcpCall(security, "word_add_comment", async ({ text }) => {
+    mcpCall(security, context, "word_add_comment", async ({ text }) => {
       await content.addComment(text)
       const preview = text.slice(0, 80) + (text.length > 80 ? "..." : "")
       return `Action: Comment added\nDetail: "${preview}"\nNext: word_type_text({text:"..."}) to continue editing`
@@ -104,7 +107,7 @@ export function registerStructureTools(
         color: z.enum(["auto", "black", "blue", "turquoise", "bright_green", "pink", "red", "yellow", "white", "dark_blue", "teal", "green", "violet", "dark_red", "dark_yellow", "gray_50", "gray_25"]).optional().describe("Watermark color"),
       },
     },
-    mcpCall(security, "word_set_watermark", async ({ text, remove, fontSize, color }) => {
+    mcpCall(security, context, "word_set_watermark", async ({ text, remove, fontSize, color }) => {
       await content.setWatermark({ text, remove, fontSize, color })
       if (remove) return "Action: Watermark removed\nNext: word_set_watermark({text:\"DRAFT\"}) to add a new watermark"
       return `Action: Watermark set "${text}"\nDetail: Font size: ${fontSize ?? 48}\nNext: word_set_watermark({text:"CONFIDENTIAL", color:"red"}) to change`

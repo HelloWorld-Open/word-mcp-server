@@ -2,6 +2,7 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordFormatting } from "../../word/formatting.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 function trackChangeResult(enable: boolean): string {
@@ -10,6 +11,7 @@ function trackChangeResult(enable: boolean): string {
 
 export function registerFormattingTools(
   server: McpServer,
+  context: ServerContext,
   formatting: WordFormatting,
   security: SecurityManager,
 ): void {
@@ -30,7 +32,7 @@ export function registerFormattingTools(
         subscript: z.boolean().optional().describe("Subscript"),
       },
     },
-    mcpCall(security, "word_set_font", async (args) => {
+    mcpCall(security, context, "word_set_font", async (args) => {
       await formatting.setFont(args)
       const props: string[] = []
       if (args.name) props.push(`font: ${args.name}`)
@@ -59,7 +61,7 @@ export function registerFormattingTools(
         lineSpacingRule: z.enum(["single", "one_point_five", "double", "at_least", "exactly", "multiple"]).optional().describe("Line spacing rule"),
       },
     },
-    mcpCall(security, "word_set_paragraph", async (args) => {
+    mcpCall(security, context, "word_set_paragraph", async (args) => {
       await formatting.setParagraphFormat(args)
       const props: string[] = []
       if (args.alignment) props.push(`align: ${args.alignment}`)
@@ -80,7 +82,7 @@ export function registerFormattingTools(
         styleName: z.string().min(1).max(255).describe("Style name (e.g. 'Heading 1', 'Normal', 'Title')"),
       },
     },
-    mcpCall(security, "word_apply_style", async ({ styleName }) => {
+    mcpCall(security, context, "word_apply_style", async ({ styleName }) => {
       await formatting.applyStyle(styleName)
       return `Action: Style '${styleName}' applied\nNext: word_type_text({text:"..."}) or word_set_font({size:12, bold:true}) for overrides`
     }),
@@ -100,7 +102,7 @@ export function registerFormattingTools(
         pageHeight: z.number().min(5).max(100).optional().describe("Page height in cm"),
       },
     },
-    mcpCall(security, "word_set_page_setup", async (args) => {
+    mcpCall(security, context, "word_set_page_setup", async (args) => {
       await formatting.setPageSetup(args)
       const props: string[] = []
       if (args.topMargin !== undefined) props.push(`top: ${args.topMargin}cm`)
@@ -125,7 +127,7 @@ export function registerFormattingTools(
         category: z.string().max(255).optional().describe("Category"),
       },
     },
-    mcpCall(security, "word_set_properties", async (args) => {
+    mcpCall(security, context, "word_set_properties", async (args) => {
       await formatting.setDocumentProperties(args)
       const props: string[] = []
       if (args.title) props.push(`title: ${args.title}`)
@@ -139,10 +141,25 @@ export function registerFormattingTools(
     {
       description: "List all in-use styles in the current document.",
     },
-    mcpCall(security, "word_list_styles", async () => {
+    mcpCall(security, context, "word_list_styles", async () => {
       const styles = await formatting.listStyles()
       const lines = styles.map((s) => `- ${s.name} (${s.builtIn ? "built-in" : "custom"})`)
       return `Action: ${styles.length} style(s) available\n${lines.join("\n")}\nNext: word_apply_style({styleName:"Heading 1"})`
+    }),
+  )
+
+  server.registerTool(
+    "word_set_body_indent",
+    {
+      description: "Apply first-line indent to all 'Normal' style paragraphs. WHEN: formatting a Chinese academic paper where each body paragraph needs standard 2-char indent.",
+      inputSchema: {
+        indent: z.number().min(0).max(10).describe("First line indent in characters (e.g. 0.74cm ≈ 2 chars for 12pt font). Default: 0.74"),
+      },
+    },
+    mcpCall(security, context, "word_set_body_indent", async ({ indent }) => {
+      const indentCm = indent ?? 0.74
+      const count = await formatting.applyBodyIndent(indentCm)
+      return `Action: Body indent applied (indent=${indentCm}cm)\nDetail: ${count} paragraph(s) processed\nNext: word_set_paragraph({firstLineIndent:0.74}) for individual paragraphs`
     }),
   )
 
@@ -154,7 +171,7 @@ export function registerFormattingTools(
         enable: z.boolean().describe("true to enable track changes, false to disable"),
       },
     },
-    mcpCall(security, "word_set_track_changes", async ({ enable }) => {
+    mcpCall(security, context, "word_set_track_changes", async ({ enable }) => {
       await formatting.setTrackChanges(enable)
       return trackChangeResult(enable)
     }),
@@ -165,7 +182,7 @@ export function registerFormattingTools(
     {
       description: "Accept all tracked changes in the document.",
     },
-    mcpCall(security, "word_accept_changes", async () => {
+    mcpCall(security, context, "word_accept_changes", async () => {
       const count = await formatting.acceptAllChanges()
       return `Action: ${count} change(s) accepted\nDetail: All revisions accepted into final text\nNext: word_save() or word_set_track_changes({enable:true}) for further edits`
     }),
@@ -176,7 +193,7 @@ export function registerFormattingTools(
     {
       description: "Reject all tracked changes in the document.",
     },
-    mcpCall(security, "word_reject_changes", async () => {
+    mcpCall(security, context, "word_reject_changes", async () => {
       const count = await formatting.rejectAllChanges()
       return `Action: ${count} change(s) rejected\nDetail: All revisions rejected, document reverted\nNext: word_undo({count:1}) or word_type_text({text:"...", mode:"instant"})`
     }),

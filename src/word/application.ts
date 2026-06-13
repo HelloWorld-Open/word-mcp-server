@@ -165,9 +165,9 @@ export class WordApplicationManager {
       }
 
       throw new WordMcpError(
-        `File does not exist: "${path}". Use word_create to create a new document, or provide a path to an existing file.`,
+        `File does not exist: "${path}". Use word_stream_start to create a new document, or provide a path to an existing file.`,
         "FILE_NOT_FOUND", false,
-        "Use word_get_status(path) to check available files, or word_create to create a new document."
+        "Use word_get_status(path) to check available files, or word_stream_start to create a new document."
       )
     }
 
@@ -263,6 +263,7 @@ export class WordApplicationManager {
       } catch { /* skip backup */ }
       ;(doc.SaveAs as (p: string, f: number) => void)(tempPath, 16)
       this.session.setActiveDoc(doc)
+      this.session.setActiveDocPath(tempPath)
     } else {
       const origPath = doc.FullName as string
       try {
@@ -272,6 +273,7 @@ export class WordApplicationManager {
         }
       } catch { /* skip backup */ }
       ;(doc.Save as () => void)()
+      this.session.setActiveDocPath(doc.FullName as string)
     }
   }
 

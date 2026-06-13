@@ -6,12 +6,12 @@ import { WordMcpError } from "../security/errors.js"
 export class WordDocument {
   constructor(
     private session: IWordSession,
-    private positionMap?: PositionMap,
+    private positionMap: PositionMap,
   ) {}
 
   private requireDoc(): Record<string, unknown> {
     const doc = this.session.activeDoc ?? (this.session.application as Record<string, unknown>).ActiveDocument as Record<string, unknown> | undefined
-    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_create to create a new document.")
+    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_stream_start to create a new document.")
     return doc
   }
 
@@ -84,20 +84,18 @@ export class WordDocument {
     const table = tables.Item(tableIndex)
     const rows = (table.Rows as { Count: number }).Count
     const columns = (table.Columns as { Count: number }).Count
-    const raw = (table.Range as Record<string, unknown>).Text as string ?? ""
-    const rowsRaw = raw.split(/\r\x07/)
     const data: string[][] = []
-    for (let r = 0; r < rowsRaw.length && data.length < rows; r++) {
-      const cells = rowsRaw[r].split("\x07")
+    for (let r = 1; r <= rows; r++) {
       const rowData: string[] = []
-      for (let c = 0; c < cells.length; c++) {
-        const cell = cells[c].replace(/[\r]+$/, "")
-        rowData.push(cell)
+      for (let c = 1; c <= columns; c++) {
+        try {
+          const cellText = ((table.Cell as (r: number, c: number) => Record<string, unknown>)(r, c).Range as Record<string, unknown>).Text as string ?? ""
+          rowData.push(cellText.replace(/[\r\x07]+$/, ""))
+        } catch {
+          rowData.push("")
+        }
       }
-      if (rowData.length > 0) {
-        while (rowData.length < columns) rowData.push("")
-        data.push(rowData)
-      }
+      data.push(rowData)
     }
     return { tableCount, rows, columns, data }
   }
@@ -206,96 +204,10 @@ export class WordDocument {
   }
 
   async getStructure(): Promise<{ headings: HeadingEntry[]; totalParagraphs: number }> {
-    if (this.positionMap) {
-      await this.positionMap.ensureFresh()
-      const headings = this.positionMap.getHeadings()
-      const doc = this.getDoc()
-      const totalParagraphs = (doc.Paragraphs as { Count: number }).Count as number
-      return { headings, totalParagraphs }
-    }
-
+    await this.positionMap.ensureFresh()
+    const headings = this.positionMap.getHeadings()
     const doc = this.getDoc()
     const totalParagraphs = (doc.Paragraphs as { Count: number }).Count as number
-    const fullText = (doc.Content as Record<string, unknown>).Text as string
-    const rawTexts = fullText.split('\r')
-    if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
-    const allTexts = rawTexts.slice(0, totalParagraphs)
-    while (allTexts.length < totalParagraphs) allTexts.push('')
-
-    const paraStarts = new Array(totalParagraphs + 2)
-    let textPos = 0
-    for (let i = 1; i <= totalParagraphs; i++) {
-      paraStarts[i] = textPos
-      textPos += allTexts[i - 1].length + 1
-    }
-    paraStarts[totalParagraphs + 1] = fullText.length
-
-    const binarySearchPara = (startPos: number): number => {
-      let lo = 1, hi = totalParagraphs
-      while (lo <= hi) {
-        const mid = Math.floor((lo + hi) / 2)
-        if (startPos >= paraStarts[mid]) {
-          if (mid >= totalParagraphs || startPos < paraStarts[mid + 1]) return mid
-          lo = mid + 1
-        } else {
-          hi = mid - 1
-        }
-      }
-      return Math.min(totalParagraphs, Math.max(1, lo))
-    }
-
-    const sel = (doc.Application as Record<string, unknown>).Selection as Record<string, unknown>
-    const origStart = sel.Start as number
-    const origEnd = sel.End as number
-    const find = sel.Find as Record<string, unknown>
-
-    const headingEntries: Array<{ pi: number; level: number }> = []
-    const headingSet = new Set<number>()
-
-    const styleFormats: Array<(l: number) => string> = [
-      (l) => `Heading ${l}`,
-      (l) => `标题 ${l}`,
-    ]
-
-    for (const fmt of styleFormats) {
-      for (let level = 1; level <= 9; level++) {
-        ;(find.ClearFormatting as () => void)()
-        try {
-          find.Style = fmt(level)
-        } catch { continue }
-        find.Text = ""
-        find.Forward = true
-        find.Wrap = 0
-
-        ;(sel.HomeKey as (u: number) => void)(6)
-
-        while (true) {
-          const found = (find.Execute as (...a: unknown[]) => boolean)(
-            "", false, false, false, false, false, true, 0, true, "", 0
-          )
-          if (!found) break
-          const start = sel.Start as number
-          const pi = binarySearchPara(start)
-          if (!headingSet.has(pi) && pi >= 1 && pi <= totalParagraphs) {
-            headingSet.add(pi)
-            headingEntries.push({ pi, level })
-          }
-        }
-      }
-    }
-
-    try {
-      const restore = (doc.Range as (s: number, e: number) => Record<string, unknown>)(origStart, origEnd)
-      ;(restore.Select as () => void)()
-    } catch { /* ignore */ }
-
-    headingEntries.sort((a, b) => a.pi - b.pi)
-    const headings: HeadingEntry[] = []
-    for (const e of headingEntries) {
-      const text = (allTexts[e.pi - 1] ?? "").replace(/\r?\n$/, "")
-      headings.push({ text, level: e.level, paragraphIndex: e.pi })
-    }
-
     return { headings, totalParagraphs }
   }
 }

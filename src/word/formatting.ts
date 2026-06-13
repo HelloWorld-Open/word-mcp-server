@@ -1,7 +1,29 @@
-import type { IWordSession } from "./session.js"
+import { WordBase } from "./word-base.js"
 import { WordMcpError } from "../security/errors.js"
 
-export class WordFormatting {
+export interface StyleProfileFont {
+  name?: string
+  size?: number
+  bold?: boolean
+  italic?: boolean
+  color?: string
+}
+
+export interface StyleProfilePara {
+  alignment?: string
+  firstLineIndent?: number
+  spaceBefore?: number
+  spaceAfter?: number
+  lineSpacing?: number
+  lineSpacingRule?: string
+}
+
+export interface StyleProfile {
+  font?: StyleProfileFont
+  paragraph?: StyleProfilePara
+}
+
+export class WordFormatting extends WordBase {
   private static readonly ALIGNMENT: Record<string, number> = {
     left: 0, center: 1, right: 2, justify: 3,
   }
@@ -18,28 +40,6 @@ export class WordFormatting {
     auto: 0, black: 1, blue: 2, turquoise: 3, bright_green: 4, pink: 5,
     red: 6, yellow: 7, white: 8, dark_blue: 9, teal: 10, green: 11,
     violet: 12, dark_red: 13, dark_yellow: 14, gray_50: 15, gray_25: 16,
-  }
-
-  constructor(private session: IWordSession) {}
-
-  private requireDoc(): Record<string, unknown> {
-    const doc = this.session.activeDoc ?? (this.session.application as Record<string, unknown>).ActiveDocument as Record<string, unknown> | undefined
-    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_create to create a new document.")
-    return doc
-  }
-
-  private getSelection(): Record<string, unknown> {
-    this.requireDoc()
-    return (this.session.application as Record<string, unknown>).Selection as Record<string, unknown>
-  }
-
-  private getDoc(): Record<string, unknown> {
-    return this.requireDoc()
-  }
-
-  private numOrEnum<T>(val: unknown, map: Record<string, T>): T | number {
-    if (typeof val === "string") return map[val] ?? (val as unknown as T)
-    return val as number
   }
 
   async setFont(params: Record<string, unknown>): Promise<void> {
@@ -86,12 +86,48 @@ export class WordFormatting {
     return [...new Set(candidates)]
   }
 
+  async modifyStyle(styleName: string, profile: StyleProfile): Promise<void> {
+    const doc = this.requireDoc()
+    const styles = doc.Styles as { Item: (n: string) => Record<string, unknown> }
+    const candidates = this.styleCandidates(styleName)
+    let style: Record<string, unknown> | undefined
+    for (const n of candidates) {
+      try { style = styles.Item(n); break } catch { continue }
+    }
+    if (!style) {
+      throw new WordMcpError(
+        `Built-in style not found: ${styleName}`,
+        "STYLE_NOT_FOUND", false,
+        "Try word_list_styles() to see available styles in the current document."
+      )
+    }
+
+    if (profile.font) {
+      const font = style.Font as Record<string, unknown>
+      if (profile.font.name != null) font.Name = profile.font.name
+      if (profile.font.size != null) font.Size = profile.font.size
+      if (profile.font.bold != null) font.Bold = profile.font.bold
+      if (profile.font.italic != null) font.Italic = profile.font.italic
+      if (profile.font.color != null) font.ColorIndex = this.numOrEnum(profile.font.color, WordFormatting.COLOR_INDEX)
+    }
+
+    if (profile.paragraph) {
+      const pf = style.ParagraphFormat as Record<string, unknown>
+      if (profile.paragraph.alignment != null) pf.Alignment = this.numOrEnum(profile.paragraph.alignment, WordFormatting.ALIGNMENT)
+      if (profile.paragraph.firstLineIndent != null) pf.FirstLineIndent = this.cmToPoints(profile.paragraph.firstLineIndent)
+      if (profile.paragraph.spaceBefore != null) pf.SpaceBefore = profile.paragraph.spaceBefore
+      if (profile.paragraph.spaceAfter != null) pf.SpaceAfter = profile.paragraph.spaceAfter
+      if (profile.paragraph.lineSpacing != null) pf.LineSpacing = profile.paragraph.lineSpacing
+      if (profile.paragraph.lineSpacingRule != null) pf.LineSpacingRule = this.numOrEnum(profile.paragraph.lineSpacingRule, WordFormatting.LINE_SPACING_RULE)
+    }
+  }
+
   private cmToPoints(cm: number): number {
     return cm * 28.3465
   }
 
   async setPageSetup(params: Record<string, unknown>): Promise<void> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     const sections = doc.Sections as { Count: number; Item: (i: number) => Record<string, unknown> }
     const si = sections.Count
     const ps = sections.Item(si).PageSetup as Record<string, unknown>
@@ -105,7 +141,7 @@ export class WordFormatting {
   }
 
   async setDocumentProperties(params: Record<string, unknown>): Promise<void> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     try {
       const props = doc.BuiltInDocumentProperties as { Item: (n: string) => Record<string, unknown> }
       if (params.title != null) props.Item("Title").Value = params.title
@@ -115,17 +151,50 @@ export class WordFormatting {
       if (params.comments != null) props.Item("Comments").Value = params.comments
       if (params.category != null) props.Item("Category").Value = params.category
     } catch {
-      // Suppress property errors on some document formats
     }
   }
 
+  async applyBodyIndent(indentCm: number): Promise<number> {
+    const doc = this.requireDoc()
+    const sel = this.getSelection()
+    const origStart = sel.Start as number
+    const origEnd = sel.End as number
+    let count = 0
+    try {
+      const rng = (doc.Range as (s: number, e: number) => Record<string, unknown>)(
+        (doc.Content as Record<string, unknown>).Start as number,
+        (doc.Content as Record<string, unknown>).End as number,
+      )
+      const find = rng.Find as Record<string, unknown>
+      const replacement = find.Replacement as Record<string, unknown>
+      const replPfmt = replacement.ParagraphFormat as Record<string, unknown>
+      ;(find.ClearFormatting as () => void)()
+      find.Style = "Normal"
+      ;(replacement.ClearFormatting as () => void)()
+      replPfmt.FirstLineIndent = this.cmToPoints(indentCm)
+      replacement.Text = "^&"
+      find.Text = ""
+      find.Forward = true
+      find.Format = true
+      find.Wrap = 1
+      ;(find.Execute as (...a: unknown[]) => boolean)("", false, false, false, false, false, true, 1, true, "^&", 2)
+      count = (doc.Paragraphs as { Count: number }).Count
+    } finally {
+      try {
+        const restore = (doc.Range as (s: number, e: number) => Record<string, unknown>)(origStart, origEnd)
+        ;(restore.Select as () => void)()
+      } catch { }
+    }
+    return count
+  }
+
   async setTrackChanges(enable: boolean): Promise<void> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     doc.TrackRevisions = enable
   }
 
   async acceptAllChanges(): Promise<number> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     const revisions = doc.Revisions as { Count: number; AcceptAll: () => void }
     const count = revisions.Count
     if (count > 0) revisions.AcceptAll()
@@ -133,7 +202,7 @@ export class WordFormatting {
   }
 
   async rejectAllChanges(): Promise<number> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     const revisions = doc.Revisions as { Count: number; RejectAll: () => void }
     const count = revisions.Count
     if (count > 0) revisions.RejectAll()
@@ -141,7 +210,7 @@ export class WordFormatting {
   }
 
   async listStyles(): Promise<Array<{ name: string; type: number; builtIn: boolean }>> {
-    const doc = this.getDoc()
+    const doc = this.requireDoc()
     const styles = doc.Styles as unknown as ArrayLike<Record<string, unknown>>
     const result: Array<{ name: string; type: number; builtIn: boolean }> = []
     for (let i = 1; i <= (styles as unknown as { Count: number }).Count; i++) {

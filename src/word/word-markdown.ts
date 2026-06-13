@@ -1,5 +1,6 @@
 import type { IWordSession } from "./session.js"
 import { WordBase } from "./word-base.js"
+import { WordTableEditor } from "./word-table-editor.js"
 
 function sanitizeText(text: string): string {
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
@@ -26,211 +27,270 @@ type Block =
   | { type: "numbered_list"; items: ListItem[] }
   | { type: "table"; rows: string[][] }
   | { type: "hr" }
+  | { type: "pagebreak" }
+  | { type: "image"; alt: string; url: string }
   | { type: "blockquote"; text: string }
   | { type: "codeblock"; text: string }
 
 export class WordMarkdown extends WordBase {
   constructor(session: IWordSession) { super(session) }
 
-  async write(markdown: string): Promise<{ blocks: number; chars: number }> {
+  async writeBlocks(markdown: string): Promise<{ blocks: number; chars: number }> {
     const blocks = this.parseBlocks(markdown)
+    if (blocks.length === 0) return { blocks: 0, chars: 0 }
     let totalChars = 0
-    const app = this.session.application as Record<string, unknown>
-
-    let screenUpdatingWasOn = true
-    try { screenUpdatingWasOn = (app.ScreenUpdating as boolean) ?? true } catch { /* ignore */ }
-    if (screenUpdatingWasOn) {
-      try { app.ScreenUpdating = false } catch { /* ignore */ }
+    this.collapseSelection()
+    for (let bi = 0; bi < blocks.length; bi++) {
+      totalChars += this.renderBlock(blocks[bi], bi, blocks.length, "end")
     }
     try {
+      ;(this.getSelection().TypeParagraph as () => void)()
+    } catch { /* ignore */ }
+    return { blocks: blocks.length, chars: totalChars }
+  }
+
+  async insertAtCursor(markdown: string): Promise<{ blocks: number; chars: number }> {
+    const blocks = this.parseBlocks(markdown)
+    if (blocks.length === 0) return { blocks: 0, chars: 0 }
+    let totalChars = 0
+    this.collapseSelection()
     for (let bi = 0; bi < blocks.length; bi++) {
-      const block = blocks[bi]
+      totalChars += this.renderBlock(blocks[bi], bi, blocks.length, "cursor")
+    }
+    return { blocks: blocks.length, chars: totalChars }
+  }
 
-      if (block.type === "hr") {
-        this.collapseSelection()
-        ;((this.getSelection().InlineShapes as Record<string, unknown>).AddHorizontalLineStandard as () => void)()
+  private renderBlock(block: Block, bi: number, totalBlocks: number, pos: "end" | "cursor" = "end"): number {
+    const atCursor = pos === "cursor"
+    if (block.type === "hr") {
+      if (!atCursor) this.goToEnd()
+      ;((this.getSelection().InlineShapes as Record<string, unknown>).AddHorizontalLineStandard as () => void)()
+      ;(this.getSelection().TypeParagraph as () => void)()
+      return 0
+    }
+
+    if (block.type === "pagebreak") {
+      if (!atCursor) this.goToEnd()
+      ;(this.getSelection().InsertBreak as (t: number) => void)(7)
+      return 0
+    }
+
+    if (block.type === "image") {
+      if (!atCursor) this.goToEnd()
+      const doc = this.requireDoc()
+      const inlineShapes = doc.InlineShapes as { AddPicture: (p: string) => Record<string, unknown> }
+      try {
+        inlineShapes.AddPicture(block.url)
         ;(this.getSelection().TypeParagraph as () => void)()
-        continue
+      } catch {
+        ;(this.getSelection().TypeText as (t: string) => void)(sanitizeText(`[图片: ${block.alt}]`))
       }
+      return block.alt.length + block.url.length
+    }
 
-      if (block.type === "heading" || block.type === "paragraph") {
-        // Capture Content.End BEFORE collapseSelection (Content is read-once in winax)
-        const doc = this.requireDoc()
-        let basePos = -1
-        try { basePos = (doc.Content as Record<string, unknown>).End as number } catch { /* ignore */ }
-        this.collapseSelection()
+    if (block.type === "heading" || block.type === "paragraph") {
+      const doc = this.requireDoc()
+      let basePos = -1
+      if (atCursor) {
         const sel = this.getSelection()
-        const segs = this.parseInline(block.text)
-        const fullText = segs.map(s => s.text).join("")
+        try { basePos = (sel.Range as Record<string, unknown>).Start as number } catch { /* ignore */ }
+      } else {
+        try { basePos = (doc.Content as Record<string, unknown>).End as number } catch { /* ignore */ }
+        this.goToEnd()
+      }
+      const sel = this.getSelection()
+      const segs = this.parseInline(block.text)
+      const fullText = segs.map(s => s.text).join("")
 
-        if (basePos >= 0) {
-          // Fast path: TypeText once + Range.Font sub-ranges
-          ;(sel.TypeText as (t: string) => void)(sanitizeText(fullText))
-          if (block.type === "heading") {
-            ;(sel.MoveStart as (u: number, c: number) => void)(1, -fullText.length)
-            this.applyHeadingStyle(sel, Math.min(block.level, 9))
-            ;(sel.Collapse as (d: number) => void)(0)
-          }
-          let offset = 0
-          for (const seg of segs) {
-            const segLen = seg.text.length
-            const needsFormat = seg.bold || seg.italic || seg.code || seg.strikethrough || seg.link
-            if (needsFormat) {
-              const range = (doc.Range as (s: number, e: number) => Record<string, unknown>)(basePos + offset, basePos + offset + segLen)
-              if (seg.bold || seg.italic || seg.strikethrough || seg.code) {
-                const rangeFont = range.Font as Record<string, unknown>
-                if (seg.bold) try { rangeFont.Bold = true } catch { /* ignore */ }
-                if (seg.italic) try { rangeFont.Italic = true } catch { /* ignore */ }
-                if (seg.strikethrough) try { rangeFont.Strikethrough = true } catch { /* ignore */ }
-                if (seg.code) {
-                  try { rangeFont.Name = "Consolas" } catch { /* ignore */ }
-                  try { rangeFont.Size = 10 } catch { /* ignore */ }
-                }
-              }
-              if (seg.link) {
-                try { ;(range.Hyperlinks as { Add: (r: unknown, a: string) => void }).Add(range, seg.link) } catch { /* ignore */ }
-              }
-            }
-            offset += segLen
-          }
-        } else {
-          // Fallback: COM bridge doesn't expose Content.End, use per-segment approach
-          for (const seg of segs) {
-            const font = sel.Font as Record<string, unknown>
-            let changedBold = false, changedItalic = false, changedStrikethrough = false
-            if (seg.bold) { try { font.Bold = true; changedBold = true } catch { /* ignore */ } }
-            if (seg.italic) { try { font.Italic = true; changedItalic = true } catch { /* ignore */ } }
-            if (seg.strikethrough) { try { font.Strikethrough = true; changedStrikethrough = true } catch { /* ignore */ } }
-            if (seg.code) {
-              try { font.Name = "Consolas" } catch { /* ignore */ }
-              try { font.Size = 10 } catch { /* ignore */ }
-            }
+      if (basePos >= 0) {
+        ;(sel.TypeText as (t: string) => void)(sanitizeText(fullText))
+        if (block.type === "heading") {
+          ;(sel.MoveStart as (u: number, c: number) => void)(1, -fullText.length)
+          this.applyHeadingStyle(sel, Math.min(block.level, 9))
+          ;(sel.Collapse as (d: number) => void)(0)
+        }
+        let offset = 0
+        for (const seg of segs) {
+          const segLen = seg.text.length
+          const needsFormat = seg.bold || seg.italic || seg.code || seg.strikethrough || seg.link
+          if (needsFormat) {
+            const range = (doc.Range as (s: number, e: number) => Record<string, unknown>)(basePos + offset, basePos + offset + segLen)
             if (seg.link) {
-              const cleaned = sanitizeText(seg.text)
-              ;(sel.TypeText as (t: string) => void)(cleaned)
+              try { ;(range.Hyperlinks as { Add: (r: unknown, a: string) => void }).Add(range, seg.link) } catch { /* ignore */ }
+            }
+            if (seg.bold || seg.italic || seg.strikethrough || seg.code) {
+              const rangeFont = range.Font as Record<string, unknown>
+              if (seg.bold) try { rangeFont.Bold = true } catch { /* ignore */ }
+              if (seg.italic) try { rangeFont.Italic = true } catch { /* ignore */ }
+              if (seg.strikethrough) try { rangeFont.Strikethrough = true } catch { /* ignore */ }
+              if (seg.code) {
+                try { rangeFont.Name = "Consolas" } catch { /* ignore */ }
+                try { rangeFont.Size = 10.5 } catch { /* ignore */ }
+                try { ;(range.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF0F0F0 } catch { /* ignore */ }
+              }
+            }
+          }
+          offset += segLen
+        }
+      } else {
+        for (const seg of segs) {
+          const font = sel.Font as Record<string, unknown>
+          let changedBold = false, changedItalic = false, changedStrikethrough = false
+          if (seg.bold) { try { font.Bold = true; changedBold = true } catch { /* ignore */ } }
+          if (seg.italic) { try { font.Italic = true; changedItalic = true } catch { /* ignore */ } }
+          if (seg.strikethrough) { try { font.Strikethrough = true; changedStrikethrough = true } catch { /* ignore */ } }
+          if (seg.code) {
+            try { font.Name = "Consolas" } catch { /* ignore */ }
+            try { font.Size = 10.5 } catch { /* ignore */ }
+          }
+          if (seg.link) {
+            const cleaned = sanitizeText(seg.text)
+            ;(sel.TypeText as (t: string) => void)(cleaned)
+            try {
+              ;(sel.MoveStart as (u: number, c: number) => void)(1, -cleaned.length)
+              const range = sel.Range as Record<string, unknown>
+              ;(range.Hyperlinks as { Add: (r: unknown, a: string) => void }).Add(range, seg.link)
+              const linkFont = range.Font as Record<string, unknown>
+              if (seg.bold) try { linkFont.Bold = true } catch { /* ignore */ }
+              if (seg.italic) try { linkFont.Italic = true } catch { /* ignore */ }
+              if (seg.strikethrough) try { linkFont.Strikethrough = true } catch { /* ignore */ }
+              ;(sel.Collapse as (d: number) => void)(0)
+            } catch { /* ignore */ }
+          } else {
+            ;(sel.TypeText as (t: string) => void)(sanitizeText(seg.text))
+            if (seg.code) {
               try {
+                const cleaned = sanitizeText(seg.text)
                 ;(sel.MoveStart as (u: number, c: number) => void)(1, -cleaned.length)
-                const range = sel.Range as Record<string, unknown>
-                ;(range.Hyperlinks as { Add: (r: unknown, a: string) => void }).Add(range, seg.link)
+                ;((sel.Range as Record<string, unknown>).Shading as Record<string, unknown>).BackgroundPatternColor = 0xF0F0F0
                 ;(sel.Collapse as (d: number) => void)(0)
               } catch { /* ignore */ }
-            } else {
-              ;(sel.TypeText as (t: string) => void)(sanitizeText(seg.text))
             }
-            if (changedBold) try { font.Bold = false } catch { /* ignore */ }
-            if (changedItalic) try { font.Italic = false } catch { /* ignore */ }
-            if (changedStrikethrough) try { font.Strikethrough = false } catch { /* ignore */ }
           }
-          if (block.type === "heading") {
-            ;(sel.MoveStart as (u: number, c: number) => void)(1, -fullText.length)
-            this.applyHeadingStyle(sel, Math.min(block.level, 9))
-            ;(sel.Collapse as (d: number) => void)(0)
-          }
+          if (changedBold) try { font.Bold = false } catch { /* ignore */ }
+          if (changedItalic) try { font.Italic = false } catch { /* ignore */ }
+          if (changedStrikethrough) try { font.Strikethrough = false } catch { /* ignore */ }
         }
-        if (bi < blocks.length - 1) { ;(sel.TypeParagraph as () => void)() }
-        totalChars += block.text.length
-        continue
+        if (block.type === "heading") {
+          ;(sel.MoveStart as (u: number, c: number) => void)(1, -fullText.length)
+          this.applyHeadingStyle(sel, Math.min(block.level, 9))
+          ;(sel.Collapse as (d: number) => void)(0)
+        }
       }
-
-      if (block.type === "bullet_list" || block.type === "numbered_list") {
-        this.collapseSelection()
-        const sel = this.getSelection()
-        const lf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
-        if (block.type === "bullet_list") {
-          ;(lf.ApplyBulletDefault as () => void)()
-        } else {
-          ;(lf.ApplyNumberDefault as () => void)()
-        }
-        for (let idx = 0; idx < block.items.length; idx++) {
-          for (let indent = 0; indent < block.items[idx].indent; indent++) {
-            try { ;(lf.IncreaseIndent as () => void)() } catch { /* IncreaseIndent may not be available */ }
-          }
-          const segs = this.parseInline(block.items[idx].text)
-          for (const seg of segs) this.typeSeg(sel, seg)
-          if (idx < block.items.length - 1) { ;(sel.TypeParagraph as () => void)() }
-        }
-        ;(sel.TypeParagraph as () => void)()
-        const freshLf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
-        ;(freshLf.RemoveNumbers as () => void)()
-        totalChars += block.items.reduce((s, item) => s + item.text.length, 0)
-        continue
-      }
-
-      if (block.type === "table") {
-        this.collapseSelection()
-        const doc = this.requireDoc()
-        const rows = block.rows.length
-        const cols = Math.max(...block.rows.map(r => r.length), 1)
-        if (rows === 0 || cols === 0) continue
-        // Guard: Tables.Add() can deadlock when ScreenUpdating=false (batch mode) + TOC present
-        const app = this.session.application as Record<string, unknown>
-        let screenUpdatingWasOn = true
-        try { screenUpdatingWasOn = (app.ScreenUpdating as boolean) ?? true } catch { /* ignore */ }
-        if (!screenUpdatingWasOn) {
-          try { app.ScreenUpdating = true } catch { /* ignore */ }
-        }
-        const range = this.getSelection().Range
-        const tables = doc.Tables as {
-          Add: (range: unknown, rows: number, cols: number) => Record<string, unknown>
-        }
-        const table = tables.Add(range, rows, cols)
-        if (!screenUpdatingWasOn) {
-          try { app.ScreenUpdating = false } catch { /* ignore */ }
-        }
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < cols; c++) {
-            const text = block.rows[r][c] ?? ""
-            ;((table.Cell as (r: number, c: number) => { Range: { Text: string } })(r + 1, c + 1).Range.Text as string) = text
-          }
-        }
-        this.applyDefaultTableBorders(table)
-        totalChars += block.rows.reduce((s, r) => s + r.reduce((a, t) => a + t.length, 0), 0)
-        this.collapseSelection()
-        continue
-      }
-
-      if (block.type === "blockquote") {
-        this.collapseSelection()
-        const sel = this.getSelection()
-        const pf = sel.ParagraphFormat as Record<string, unknown>
-        const prevIndent = (pf.LeftIndent as number) ?? 0
-        ;(pf.LeftIndent as number) = prevIndent + 28.35
-        ;(sel.Font as Record<string, unknown>).Italic = true
-        const segs = this.parseInline(block.text)
-        for (const seg of segs) this.typeSeg(sel, seg)
-        ;(sel.Font as Record<string, unknown>).Italic = false
-        ;(pf.LeftIndent as number) = prevIndent
-        if (bi < blocks.length - 1) { ;(sel.TypeParagraph as () => void)() }
-        totalChars += block.text.length
-        continue
-      }
-
-      if (block.type === "codeblock") {
-        this.collapseSelection()
-        const sel = this.getSelection()
-        const range = sel.Range as Record<string, unknown>
-        range.Text = sanitizeText(block.text)
-        const rangeFont = range.Font as Record<string, unknown>
-        try { rangeFont.Name = "Consolas" } catch { /* ignore */ }
-        try { rangeFont.Size = 10 } catch { /* ignore */ }
-        ;(sel.Collapse as (d: number) => void)(0)
-      if (bi < blocks.length - 1) { ;(sel.TypeParagraph as () => void)() }
-        totalChars += block.text.length
-        continue
-      }
+      if (bi < totalBlocks - 1) { ;(sel.TypeParagraph as () => void)() }
+      return block.text.length
     }
 
-    try {
+    if (block.type === "bullet_list" || block.type === "numbered_list") {
+      if (!atCursor) this.goToEnd()
       const sel = this.getSelection()
-      ;(sel.TypeParagraph as () => void)()
-    } catch { /* ignore */ }
-
-    return { blocks: blocks.length, chars: totalChars }
-    } finally {
-      if (screenUpdatingWasOn) {
-        try { app.ScreenUpdating = true } catch { /* ignore */ }
+      const lf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
+      if (block.type === "bullet_list") {
+        ;(lf.ApplyBulletDefault as () => void)()
+      } else {
+        ;(lf.ApplyNumberDefault as () => void)()
       }
+      for (let idx = 0; idx < block.items.length; idx++) {
+        for (let indent = 0; indent < block.items[idx].indent; indent++) {
+          try { ;(lf.IncreaseIndent as () => void)() } catch { /* IncreaseIndent may not be available */ }
+        }
+        const segs = this.parseInline(block.items[idx].text)
+        for (const seg of segs) this.typeSeg(sel, seg)
+        if (idx < block.items.length - 1) { ;(sel.TypeParagraph as () => void)() }
+      }
+      ;(sel.TypeParagraph as () => void)()
+      const freshLf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
+      ;(freshLf.RemoveNumbers as () => void)()
+      return block.items.reduce((s, item) => s + item.text.length, 0)
     }
+
+    if (block.type === "table") {
+      if (!atCursor) this.goToEnd()
+      const doc = this.requireDoc()
+      const rows = block.rows.length
+      const cols = Math.max(...block.rows.map(r => r.length), 1)
+      if (rows === 0 || cols === 0) return 0
+      const range = this.getSelection().Range
+      const tables = doc.Tables as {
+        Add: (range: unknown, rows: number, cols: number) => Record<string, unknown>
+      }
+      const table = tables.Add(range, rows, cols)
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const text = block.rows[r][c] ?? ""
+          ;((table.Cell as (r: number, c: number) => { Range: { Text: string } })(r + 1, c + 1).Range.Text as string) = text
+        }
+      }
+      WordTableEditor.applyDefaultBorders(table)
+      try { ;(table.AutoFitBehavior as (b: number) => void)(1) } catch { /* ignore */ }
+      try {
+        const headerRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
+        ;((headerRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
+        ;(headerRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xD9E2F3
+      } catch { /* ignore */ }
+      try { ;(this.getSelection().EndKey as (u: number) => void)(6) } catch { /* ignore */ }
+      if (bi < totalBlocks - 1) { ;(this.getSelection().TypeParagraph as () => void)() }
+      return block.rows.reduce((s, r) => s + r.reduce((a, t) => a + t.length, 0), 0)
+    }
+
+    if (block.type === "blockquote") {
+      if (!atCursor) this.goToEnd()
+      const sel = this.getSelection()
+      const pf = sel.ParagraphFormat as Record<string, unknown>
+      const prevIndent = (pf.LeftIndent as number) ?? 0
+      ;(pf.LeftIndent as number) = prevIndent + 28.35
+      ;(sel.Font as Record<string, unknown>).Italic = true
+      const segs = this.parseInline(block.text)
+      const fullText = segs.map(s => s.text).join("")
+      for (const seg of segs) this.typeSeg(sel, seg)
+      ;(sel.Font as Record<string, unknown>).Italic = false
+      try {
+        ;(sel.MoveStart as (u: number, c: number) => void)(1, -fullText.length)
+        const rng = sel.Range as Record<string, unknown>
+        ;(rng.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF5F5F5
+        const borders = rng.Borders as { Item: (i: number) => Record<string, unknown> }
+        const b = borders.Item(1)
+        b.LineStyle = 1
+        b.ColorIndex = 15
+        b.LineWidth = 8
+        ;(sel.Collapse as (d: number) => void)(0)
+      } catch { /* ignore */ }
+      ;(pf.LeftIndent as number) = prevIndent
+      if (bi < totalBlocks - 1) { ;(sel.TypeParagraph as () => void)() }
+      return block.text.length
+    }
+
+    if (block.type === "codeblock") {
+      if (!atCursor) this.goToEnd()
+      const sel = this.getSelection()
+      const doc = this.requireDoc()
+      const codeLines = block.text.split("\n")
+      const startPos = (doc.Content as Record<string, unknown>).End as number
+
+      for (let li = 0; li < codeLines.length; li++) {
+        ;(sel.TypeText as (t: string) => void)(sanitizeText(codeLines[li]))
+        if (li < codeLines.length - 1) {
+          ;(sel.TypeParagraph as () => void)()
+        }
+      }
+
+      const endPos = (doc.Content as Record<string, unknown>).End as number
+      try {
+        const codeRange = (doc.Range as (s: number, e: number) => Record<string, unknown>)(startPos, endPos)
+        ;(codeRange.Font as Record<string, unknown>).Name = "Consolas"
+        ;(codeRange.Font as Record<string, unknown>).Size = 10.5
+        ;(codeRange.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF5F5F5
+      } catch { /* ignore */ }
+
+      try {
+        const endRange = (doc.Range as (s: number, e: number) => Record<string, unknown>)(endPos, endPos)
+        ;(endRange.Select as () => void)()
+      } catch { /* ignore */ }
+      if (bi < totalBlocks - 1) { ;(this.getSelection().TypeParagraph as () => void)() }
+      return block.text.length
+    }
+
+    return 0
   }
 
   private applyHeadingStyle(sel: Record<string, unknown>, level: number): void {
@@ -247,7 +307,7 @@ export class WordMarkdown extends WordBase {
     try { font.Strikethrough = seg.strikethrough } catch { /* ignore */ }
     if (seg.code) {
       try { font.Name = "Consolas" } catch { /* ignore */ }
-      try { font.Size = 10 } catch { /* ignore */ }
+      try { font.Size = 10.5 } catch { /* ignore */ }
     }
 
     if (seg.link) {
@@ -257,36 +317,30 @@ export class WordMarkdown extends WordBase {
         ;(sel.MoveStart as (unit: number, count: number) => void)(1, -cleaned.length)
         const range = sel.Range as Record<string, unknown>
         ;(range.Hyperlinks as { Add: (r: unknown, a: string) => void }).Add(range, seg.link)
+        const linkFont = range.Font as Record<string, unknown>
+        if (seg.bold) try { linkFont.Bold = true } catch { /* ignore */ }
+        if (seg.italic) try { linkFont.Italic = true } catch { /* ignore */ }
+        if (seg.strikethrough) try { linkFont.Strikethrough = true } catch { /* ignore */ }
         ;(sel.Collapse as (d: number) => void)(0)
       } catch { /* ignore */ }
     } else {
       ;(sel.TypeText as (t: string) => void)(sanitizeText(seg.text))
+      if (seg.code) {
+        try {
+          const cleaned = sanitizeText(seg.text)
+          ;(sel.MoveStart as (unit: number, count: number) => void)(1, -cleaned.length)
+          ;((sel.Range as Record<string, unknown>).Shading as Record<string, unknown>).BackgroundPatternColor = 0xF0F0F0
+          ;(sel.Collapse as (d: number) => void)(0)
+        } catch { /* ignore */ }
+      }
     }
 
     if (seg.code) {
       const prevName = font.Name as string
       const prevSize = font.Size as number
       if (prevName && prevName !== "Consolas") try { font.Name = prevName } catch { /* ignore */ }
-      if (prevSize && prevSize !== 10) try { font.Size = prevSize } catch { /* ignore */ }
+      if (prevSize && prevSize !== 10.5) try { font.Size = prevSize } catch { /* ignore */ }
     }
-  }
-
-  private applyDefaultTableBorders(table: Record<string, unknown>): void {
-    try {
-      const borders = table.Borders as { Item: (t: number) => Record<string, unknown> }
-      const apply = (items: number[], style: number, color: number, width: number) => {
-        for (const t of items) {
-          try {
-            const b = borders.Item(t)
-            b.LineStyle = style
-            b.ColorIndex = color
-            b.LineWidth = width
-          } catch { }
-        }
-      }
-      apply([1, 2, 3, 4], 1, 1, 4)
-      apply([5, 6], 1, 1, 2)
-    } catch { }
   }
 
   private parseInline(text: string): InlineSegment[] {
@@ -363,7 +417,10 @@ export class WordMarkdown extends WordBase {
       i++
     }
 
-    if (current) segments.push({ text: current, bold, italic, code, strikethrough })
+    if (current || bold || italic || code || strikethrough) {
+      segments.push({ text: current, bold, italic, code, strikethrough })
+    }
+    bold = false; italic = false; code = false; strikethrough = false
     return segments
   }
 
@@ -388,6 +445,12 @@ export class WordMarkdown extends WordBase {
         const level = trimmed.match(/^#+/)![0].length
         const text = trimmed.replace(/^#+\s+/, "")
         blocks.push({ type: "heading", level, text })
+        i++
+        continue
+      }
+
+      if (trimmed === "[[pagebreak]]") {
+        blocks.push({ type: "pagebreak" })
         i++
         continue
       }
@@ -458,11 +521,22 @@ export class WordMarkdown extends WordBase {
         continue
       }
 
+      if (trimmed.startsWith("![")) {
+        const match = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)/)
+        if (match) {
+          blocks.push({ type: "image", alt: match[1], url: match[2] })
+          i++
+          continue
+        }
+      }
+
       const paraLines: string[] = []
       while (i < lines.length) {
         const t = lines[i].trim()
         if (t === "") break
         if (/^(#{1,6}\s|[-*+]\s|\d+[.)]\s|> )/.test(t)) break
+        if (t.startsWith("![")) break
+        if (t === "[[pagebreak]]") break
         if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(t)) break
         if (t.startsWith("|") || this.isLooseTableRow(t) || t.startsWith("```")) break
         paraLines.push(t)

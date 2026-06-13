@@ -2,10 +2,12 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordMediaEditor } from "../../word/word-media-editor.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 export function registerMediaTools(
   server: McpServer,
+  context: ServerContext,
   content: WordMediaEditor,
   security: SecurityManager,
 ): void {
@@ -19,7 +21,7 @@ export function registerMediaTools(
         height: z.number().positive().max(1000).optional().describe("Height in points"),
       },
     },
-    mcpCall(security, "word_insert_image", async ({ imagePath, width, height }) => {
+    mcpCall(security, context, "word_insert_image", async ({ imagePath, width, height }) => {
       const safePath = security.pathSanitizer.validateForRead(imagePath)
       await content.insertImage({ imagePath: safePath, width, height })
       const dims = width && height ? `${width}x${height}pt` : "original size"
@@ -39,7 +41,7 @@ export function registerMediaTools(
         height: z.number().positive().max(1000).optional().describe("Height in points (default: 250)"),
       },
     },
-    mcpCall(security, "word_insert_chart", async ({ type, data, title, width, height }) => {
+    mcpCall(security, context, "word_insert_chart", async ({ type, data, title, width, height }) => {
       const result = await content.insertChart({ type, data, title, width, height })
       return `Action: Chart inserted (${result.type})\nDetail: ${result.series} series, title: ${title ?? "none"}\nNext: word_type_text({text:"Chart shows..."})`
     }),
@@ -58,7 +60,7 @@ export function registerMediaTools(
         positionTop: z.number().min(0).max(2000).optional().describe("Top position in points (default: 50)"),
       },
     },
-    mcpCall(security, "word_insert_textbox", async ({ text, width, height, orientation, positionLeft, positionTop }) => {
+    mcpCall(security, context, "word_insert_textbox", async ({ text, width, height, orientation, positionLeft, positionTop }) => {
       const result = await content.insertTextbox({ text, width, height, orientation, positionLeft, positionTop })
       return `Action: Text box inserted (${result.width}x${result.height}pt)\nOrientation: ${orientation ?? "horizontal"}\nNext: word_type_text({text:"..."}) or word_insert_textbox({text:"Another box", positionLeft:200})`
     }),

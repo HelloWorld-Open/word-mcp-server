@@ -10,45 +10,6 @@ export class WordTextEditor extends WordBase {
     first: 1, next: 2, previous: 3, last: -1,
   }
 
-  private static sentenceEnders = new Set(['。', '！', '？', '\n', '\r', '.', '!', '?'])
-
-  /**
-   * 批量插入内容到文档中，按标点符号和最大长度切分批次，
-   * 每批之间插入短暂延时以确保 Word 界面响应流畅。
-   *
-   * @param text  - 待插入的文本内容
-   * @param mode  - 插入模式："smooth"（平滑，默认）或 "instant"（一次性）
-   */
-  async typeText(text: string, mode?: "smooth" | "instant"): Promise<void> {
-    this.collapseSelection()
-    const cleaned = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
-    if (mode === "instant") {
-      ;(this.getSelection().TypeText as (t: string) => void)(cleaned)
-      return
-    }
-    const batches = this.splitIntoBatches(cleaned)
-    for (let i = 0; i < batches.length; i++) {
-      ;(this.getSelection().TypeText as (t: string) => void)(batches[i])
-      if (i < batches.length - 1) {
-        await this.sleep(8)
-      }
-    }
-  }
-
-  private splitIntoBatches(text: string): string[] {
-    const batches: string[] = []
-    let start = 0
-    const enders = WordTextEditor.sentenceEnders
-    for (let i = 0; i < text.length; i++) {
-      if (enders.has(text[i]) || i - start >= 500) {
-        batches.push(text.slice(start, i + 1))
-        start = i + 1
-      }
-    }
-    if (start < text.length) batches.push(text.slice(start))
-    return batches.length ? batches : [text]
-  }
-
   async insertParagraph(count?: number): Promise<void> {
     this.collapseSelection()
     const sel = this.getSelection()
@@ -90,31 +51,7 @@ export class WordTextEditor extends WordBase {
     const range = sel.Range as Record<string, unknown>
     const text = (range.Text as string) ?? ""
     const start = range.Start as number
-    const doc = this.requireDoc()
-    const fullText = (doc.Content as Record<string, unknown>).Text as string
-    const parasCount = (doc.Paragraphs as { Count: number }).Count as number
-    const rawTexts = fullText.split('\r')
-    if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
-    const allTexts = rawTexts.slice(0, parasCount)
-    const paraStarts = new Array(parasCount + 2)
-    let textPos = 0
-    for (let i = 1; i <= parasCount; i++) {
-      paraStarts[i] = textPos
-      textPos += (allTexts[i - 1] ?? '').length + 1
-    }
-    paraStarts[parasCount + 1] = fullText.length
-    let paraIndex = 0
-    let lo = 1, hi = parasCount
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      if (start >= paraStarts[mid]) {
-        if (mid >= parasCount || start < paraStarts[mid + 1]) { paraIndex = mid; break }
-        lo = mid + 1
-      } else {
-        hi = mid - 1
-      }
-    }
-    return `Found at paragraph ${paraIndex}, position ${start}. Text: "${text.slice(0, 200)}"`
+    return `Found at position ${start}. Text: "${text.slice(0, 200)}"`
   }
 
   async findReplace(

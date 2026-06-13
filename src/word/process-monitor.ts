@@ -8,7 +8,7 @@ export class ProcessMonitor {
   private _pendingCheck: boolean = false
   private _destroyed = false
 
-  constructor(intervalMs = 3000) {
+  constructor(intervalMs = 30000) {
     this._intervalMs = intervalMs
   }
 
@@ -49,6 +49,7 @@ export class ProcessMonitor {
 
   private _check(): void {
     if (this._pendingCheck || this._destroyed) return
+    if (this._alive) return
     this._pendingCheck = true
     exec(
       'tasklist /FO CSV /NH',

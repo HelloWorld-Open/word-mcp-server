@@ -22,7 +22,6 @@ function createMockSession(headings?: HeadingEntry[]): IWordSession {
     application: { Selection: {}, ScreenUpdating: true, ActiveDocument: doc } as Record<string, unknown>,
     activeDoc: doc,
     activeDocPath: null,
-    wasInNonBody: false,
     setActiveDoc: vi.fn(),
     setActiveDocPath: vi.fn(),
     ensureAlive: vi.fn(),

@@ -2,10 +2,12 @@ import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordTableEditor } from "../../word/word-table-editor.js"
 import { SecurityManager } from "../../security/policy.js"
+import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
 export function registerTableTools(
   server: McpServer,
+  context: ServerContext,
   content: WordTableEditor,
   security: SecurityManager,
 ): void {
@@ -20,7 +22,7 @@ export function registerTableTools(
         autoFitBehavior: z.enum(["fixed", "contents", "window"]).optional().describe("Auto-fit behavior"),
       },
     },
-    mcpCall(security, "word_insert_table", async ({ rows, columns, data, autoFitBehavior }) => {
+    mcpCall(security, context, "word_insert_table", async ({ rows, columns, data, autoFitBehavior }) => {
       const result = await content.insertTable({ rows, columns, data, autoFitBehavior })
       const failInfo = result.failCount > 0 ? `\nWarning: ${result.failCount} cell(s) failed to write` : ""
       return `Action: Table inserted (${result.rows}x${result.columns})${failInfo}\nData rows: ${data?.length ?? 0}\nNext: word_edit_cell({row:1, column:1, text:"..."}) or word_edit_cells({data:[[\"a\",\"b\"]]}) or word_apply_table_style({styleName:"Light List Accent 1"})`
@@ -38,7 +40,7 @@ export function registerTableTools(
         text: z.string().max(100000).describe("New cell text"),
       },
     },
-    mcpCall(security, "word_edit_cell", async ({ tableIndex, row, column, text }) => {
+    mcpCall(security, context, "word_edit_cell", async ({ tableIndex, row, column, text }) => {
       await content.editTableCell({ tableIndex, row, column, text })
       const preview = text.slice(0, 50) + (text.length > 50 ? "..." : "")
       return `Action: Cell (${row},${column}) updated\nDetail: "${preview}"\nNext: word_edit_cell({row:${row+1}, column:${column}, text:"..."}) or word_set_cell_font({row:${row}, column:${column}, bold:true})`
@@ -54,10 +56,13 @@ export function registerTableTools(
         data: z.array(z.array(z.string().max(100000)).max(100)).min(1).max(1000).describe("2D array of cell data (row-major)"),
       },
     },
-    mcpCall(security, "word_edit_cells", async ({ tableIndex, data }) => {
+    mcpCall(security, context, "word_edit_cells", async ({ tableIndex, data }) => {
       const result = await content.editCells({ tableIndex, data })
       const failInfo = result.failCount > 0 ? `, ${result.failCount} cell(s) failed` : ""
-      return `Action: Batch-filled ${result.rows}x${result.columns} table${failInfo}\nDetail: ${data.length} row(s) written\nNext: word_set_cell_font({row:1, column:1, bold:true}) or word_edit_cell({row:1, column:1, text:"..."})`
+      let warn = ""
+      if (result.truncatedRows > 0) warn += `\nWarning: ${result.truncatedRows} row(s) truncated (table has ${result.rows} rows)`
+      if (result.truncatedCols > 0) warn += `\nWarning: ${result.truncatedCols} column(s) truncated (table has ${result.columns} columns)`
+      return `Action: Batch-filled ${result.rows}x${result.columns} table${failInfo}\nDetail: ${data.length} row(s) written${warn}\nNext: word_set_cell_font({row:1, column:1, bold:true}) or word_edit_cell({row:1, column:1, text:"..."})`
     }),
   )
 
@@ -70,9 +75,10 @@ export function registerTableTools(
         data: z.array(z.string().max(100000)).max(100).optional().describe("Cell data for the new row"),
       },
     },
-    mcpCall(security, "word_add_table_row", async ({ tableIndex, data }) => {
-      await content.addTableRow({ tableIndex, data })
-      return `Action: Row added\nDetail: ${data?.length ?? 0} cells\nNext: word_edit_cell({row:1, column:1, text:"..."}) or word_set_row_height({row:1, height:30})`
+    mcpCall(security, context, "word_add_table_row", async ({ tableIndex, data }) => {
+      const result = await content.addTableRow({ tableIndex, data })
+      const warn = result.writtenCells < result.totalCells ? `\nWarning: only ${result.writtenCells}/${result.totalCells} cells written (table has ${result.totalCells} columns)` : ""
+      return `Action: Row added\nDetail: ${result.writtenCells} cells${warn}\nNext: word_edit_cell({row:1, column:1, text:"..."}) or word_set_row_height({row:1, height:30})`
     }),
   )
 
@@ -85,7 +91,7 @@ export function registerTableTools(
         rowIndex: z.number().int().min(1).describe("Row number to delete (1-based)"),
       },
     },
-    mcpCall(security, "word_delete_table_row", async ({ tableIndex, rowIndex }) => {
+    mcpCall(security, context, "word_delete_table_row", async ({ tableIndex, rowIndex }) => {
       await content.deleteTableRow({ tableIndex, rowIndex })
       return `Action: Row ${rowIndex} deleted\nNext: word_undo({count:1}) or word_add_table_row({data:["a","b"]})`
     }),
@@ -109,7 +115,7 @@ export function registerTableTools(
         }).optional(),
       },
     },
-    mcpCall(security, "word_set_table_borders", async ({ tableIndex, inside, outside }) => {
+    mcpCall(security, context, "word_set_table_borders", async ({ tableIndex, inside, outside }) => {
       await content.setTableBorders({ tableIndex, inside, outside })
       const changes: string[] = []
       if (inside) changes.push(`inside: style=${inside.style ?? "def"}, color=${inside.color ?? "def"}, size=${inside.size ?? "def"}`)
@@ -121,16 +127,17 @@ export function registerTableTools(
   server.registerTool(
     "word_set_table_shading",
     {
-      description: "Set background shading color for a table or first row.",
+      description: "Set background shading color for a table or a specific row.",
       inputSchema: {
         tableIndex: z.number().int().min(1).optional().describe("Table index (1-based, default: 1)"),
         color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be hex color like #FF0000").describe("Hex color like #E8F0FE"),
         target: z.enum(["table", "row"]).optional().describe("Apply to entire table or first row only"),
+        rowIndex: z.number().int().min(1).optional().describe("Row number when target='row' (1-based, default: 1)"),
       },
     },
-    mcpCall(security, "word_set_table_shading", async ({ tableIndex, color, target }) => {
-      await content.setTableShading({ tableIndex, color, target })
-      const t = target === "row" ? "First row" : "Entire table"
+    mcpCall(security, context, "word_set_table_shading", async ({ tableIndex, color, target, rowIndex }) => {
+      await content.setTableShading({ tableIndex, color, target, rowIndex })
+      const t = target === "row" ? `Row ${rowIndex ?? 1}` : "Entire table"
       return `Action: Table shading set (${color})\nDetail: Target: ${t}\nNext: word_set_table_borders({outside:{style:"single", color:"black", size:8}})`
     }),
   )
@@ -147,7 +154,7 @@ export function registerTableTools(
         colEnd: z.number().int().min(1).describe("End column (1-based)"),
       },
     },
-    mcpCall(security, "word_merge_table_cells", async ({ tableIndex, rowStart, colStart, rowEnd, colEnd }) => {
+    mcpCall(security, context, "word_merge_table_cells", async ({ tableIndex, rowStart, colStart, rowEnd, colEnd }) => {
       await content.mergeTableCells({ tableIndex, rowStart, colStart, rowEnd, colEnd })
       return `Action: Cells merged (${rowStart},${colStart})→(${rowEnd},${colEnd})\nNext: word_edit_cell({row:${rowStart}, column:${colStart}, text:"..."})`
     }),
@@ -163,7 +170,7 @@ export function registerTableTools(
         width: z.number().min(1).max(5000).describe("Width in points (e.g. 100 ≈ 3.5cm)"),
       },
     },
-    mcpCall(security, "word_set_column_width", async ({ tableIndex, column, width }) => {
+    mcpCall(security, context, "word_set_column_width", async ({ tableIndex, column, width }) => {
       await content.setColumnWidth({ tableIndex, column, width })
       return `Action: Column ${column} width = ${width}pt\nNext: word_set_row_height({row:1, height:30}) or word_set_cell_font({row:1, column:${column}, bold:true})`
     }),
@@ -179,7 +186,7 @@ export function registerTableTools(
         height: z.number().min(1).max(5000).describe("Height in points (e.g. 30 ≈ 1cm)"),
       },
     },
-    mcpCall(security, "word_set_row_height", async ({ tableIndex, row, height }) => {
+    mcpCall(security, context, "word_set_row_height", async ({ tableIndex, row, height }) => {
       await content.setRowHeight({ tableIndex, row, height })
       return `Action: Row ${row} height = ${height}pt\nNext: word_set_cell_font({row:${row}, column:1, bold:true, size:12})`
     }),
@@ -202,7 +209,7 @@ export function registerTableTools(
         strikethrough: z.boolean().optional().describe("Strikethrough"),
       },
     },
-    mcpCall(security, "word_set_cell_font", async ({ tableIndex, row, column, name, size, bold, italic, underline, color, strikethrough }) => {
+    mcpCall(security, context, "word_set_cell_font", async ({ tableIndex, row, column, name, size, bold, italic, underline, color, strikethrough }) => {
       await content.setCellFont({ tableIndex, row, column, name, size, bold, italic, underline, color, strikethrough })
       const props: string[] = []
       if (name) props.push(`font: ${name}`)
@@ -224,7 +231,7 @@ export function registerTableTools(
         styleName: z.string().min(1).max(255).describe("Style name (e.g. 'Table Grid', 'Light List Accent 1')"),
       },
     },
-    mcpCall(security, "word_apply_table_style", async ({ tableIndex, styleName }) => {
+    mcpCall(security, context, "word_apply_table_style", async ({ tableIndex, styleName }) => {
       await content.applyTableStyle({ tableIndex, styleName })
       return `Action: Table style "${styleName}" applied\nNext: word_set_table_shading({color:"#E8F0FE"}) or word_set_table_borders({outside:{style:"single"}})`
     }),
@@ -239,7 +246,7 @@ export function registerTableTools(
         column: z.number().int().min(1).optional().describe("Add to left of this column (omit to append at end)"),
       },
     },
-    mcpCall(security, "word_add_table_column", async ({ tableIndex, column }) => {
+    mcpCall(security, context, "word_add_table_column", async ({ tableIndex, column }) => {
       await content.addTableColumn({ tableIndex, column })
       const pos = column ? `left of column ${column}` : "end"
       return `Action: Column added (${pos})\nNext: word_set_column_width({column:1, width:100}) or word_edit_cell({row:1, column:1, text:"..."})`
@@ -255,7 +262,7 @@ export function registerTableTools(
         column: z.number().int().min(1).describe("Column number to delete (1-based)"),
       },
     },
-    mcpCall(security, "word_delete_table_column", async ({ tableIndex, column }) => {
+    mcpCall(security, context, "word_delete_table_column", async ({ tableIndex, column }) => {
       await content.deleteTableColumn({ tableIndex, column })
       return `Action: Column ${column} deleted\nNext: word_undo({count:1}) or word_add_table_column({column:${column}})`
     }),
@@ -272,7 +279,7 @@ export function registerTableTools(
         alignment: z.enum(["top", "center", "bottom"]).describe("Vertical alignment"),
       },
     },
-    mcpCall(security, "word_set_cell_vertical_alignment", async ({ tableIndex, row, column, alignment }) => {
+    mcpCall(security, context, "word_set_cell_vertical_alignment", async ({ tableIndex, row, column, alignment }) => {
       await content.setCellVerticalAlignment({ tableIndex, row, column, alignment })
       return `Action: Cell (${row},${column}) vertical alignment: ${alignment}\nNext: word_set_cell_font({row:${row}, column:${column}, bold:true})`
     }),
@@ -287,7 +294,7 @@ export function registerTableTools(
         separator: z.string().max(10).optional().describe("Separator character (default: tab)"),
       },
     },
-    mcpCall(security, "word_table_to_text", async ({ tableIndex, separator }) => {
+    mcpCall(security, context, "word_table_to_text", async ({ tableIndex, separator }) => {
       const result = await content.tableToText({ tableIndex, separator })
       return `Action: Table converted to text\nDetail: ${result}\nNext: word_text_to_table() to convert back or word_undo()`
     }),
@@ -302,7 +309,7 @@ export function registerTableTools(
         autoFitBehavior: z.enum(["fixed", "contents", "window"]).optional().describe("Auto-fit behavior"),
       },
     },
-    mcpCall(security, "word_text_to_table", async ({ separator, autoFitBehavior }) => {
+    mcpCall(security, context, "word_text_to_table", async ({ separator, autoFitBehavior }) => {
       const result = await content.textToTable({ separator, autoFitBehavior })
       return `Action: Text → table (${result.rows}x${result.columns})\nNext: word_set_column_width({column:1, width:120}) or word_apply_table_style({styleName:"Table Grid"})`
     }),

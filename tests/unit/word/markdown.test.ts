@@ -7,7 +7,6 @@ function createMockSession(): IWordSession {
     application: {} as Record<string, unknown>,
     activeDoc: null,
     activeDocPath: null,
-    wasInNonBody: false,
     setActiveDoc: () => {},
     setActiveDocPath: () => {},
     ensureAlive: () => {},
@@ -342,7 +341,7 @@ describe("WordMarkdown.write (with mock COM)", () => {
   it("succeeds with empty input", async () => {
     const session = createDocSession()
     const md = new WordMarkdown(session)
-    const result = await md.write("")
+    const result = await md.writeBlocks("")
     expect(result).toMatchObject({ blocks: 0, chars: 0 })
   })
 })

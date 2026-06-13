@@ -39,8 +39,9 @@ export class WordTableEditor extends WordBase {
   async insertTable(params: InsertTableParams): Promise<{ rows: number; columns: number; failCount: number }> {
     this.collapseSelection()
     const doc = this.requireDoc()
+    const sel = this.getSelection()
     const tables = doc.Tables as { Add: (r: unknown, rows: number, cols: number) => Record<string, unknown> }
-    const table = tables.Add(this.getSelection().Range, params.rows, params.columns)
+    const table = tables.Add(sel.Range, params.rows, params.columns)
     if (params.autoFitBehavior != null) {
       ;(table.AutoFitBehavior as (b: number) => void)(this.numOrEnum(params.autoFitBehavior, WordTableEditor.AUTO_FIT))
     }
@@ -57,8 +58,32 @@ export class WordTableEditor extends WordBase {
         }
       }
     }
-    this.applyDefaultBorders(table)
-    const sel = this.getSelection()
+    WordTableEditor.applyDefaultBorders(table)
+    // Auto-format: attempt built-in style, fallback to manual header formatting
+    if (params.data && params.data.length > 0) {
+      let styled = false
+      try {
+        const styles = doc.Styles as unknown as { Count: number; Item: (i: number) => Record<string, unknown> }
+        const candidates = ["Grid Table 4 - Accent 1", "网格表4 - 着色1", "Grid Table 4"]
+        for (const name of candidates) {
+          for (let i = 1; i <= styles.Count; i++) {
+            if (((styles.Item(i).NameLocal as string) ?? "").toLowerCase() === name.toLowerCase()) {
+              ;(table.Style as string) = name
+              styled = true
+              break
+            }
+          }
+          if (styled) break
+        }
+      } catch { /* style may not exist */ }
+      if (!styled) {
+        try {
+          const firstRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
+          ;((firstRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
+          ;(firstRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF3E2D9
+        } catch { /* ignore */ }
+      }
+    }
     ;(sel.EndKey as (u: number) => void)(6)
     ;(sel.TypeParagraph as () => void)()
     return { rows: params.rows, columns: params.columns, failCount }
@@ -74,12 +99,33 @@ export class WordTableEditor extends WordBase {
     return tables.Item(idx)
   }
 
-  async editCells(params: { tableIndex?: number; data: string[][] }): Promise<{ rows: number; columns: number; failCount: number }> {
+  private validateCellIndices(table: Record<string, unknown>, row: number, col: number): void {
+    const rowCount = (table.Rows as { Count: number }).Count
+    const colCount = (table.Columns as { Count: number }).Count
+    if (row < 1 || row > rowCount) {
+      throw new WordMcpError(
+        `Row index ${row} out of range (1-${rowCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${rowCount} row(s).`,
+      )
+    }
+    if (col < 1 || col > colCount) {
+      throw new WordMcpError(
+        `Column index ${col} out of range (1-${colCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${colCount} column(s).`,
+      )
+    }
+  }
+
+  async editCells(params: { tableIndex?: number; data: string[][] }): Promise<{ rows: number; columns: number; failCount: number; truncatedRows: number; truncatedCols: number }> {
     const table = this.requireTable(params)
     const rows = (table.Rows as { Count: number }).Count
     const cols = (table.Columns as { Count: number }).Count
     let failCount = 0
-    for (let r = 0; r < params.data.length && r < rows; r++) {
+    const dataRows = params.data.length
+    const dataCols = params.data.reduce((m, r) => Math.max(m, r.length), 0)
+    for (let r = 0; r < dataRows && r < rows; r++) {
       for (let c = 0; c < params.data[r].length && c < cols; c++) {
         try {
           const cellObj = (table.Cell as (r: number, c: number) => Record<string, unknown>)(r + 1, c + 1)
@@ -88,29 +134,42 @@ export class WordTableEditor extends WordBase {
         } catch { failCount++ }
       }
     }
-    return { rows, columns: cols, failCount }
+    return { rows, columns: cols, failCount, truncatedRows: dataRows > rows ? dataRows - rows : 0, truncatedCols: dataCols > cols ? dataCols - cols : 0 }
   }
 
   async editTableCell(params: EditCellParams): Promise<void> {
     const table = this.requireTable(params)
+    this.validateCellIndices(table, params.row, params.column)
     const cellObj = (table.Cell as (r: number, c: number) => Record<string, unknown>)(params.row, params.column)
     const cellRange = cellObj.Range as Record<string, unknown>
     cellRange.Text = params.text
   }
 
-  async addTableRow(params: AddTableRowParams): Promise<void> {
+  async addTableRow(params: AddTableRowParams): Promise<{ writtenCells: number; totalCells: number }> {
     const table = this.requireTable(params)
     const row = (table.Rows as { Add: () => Record<string, unknown> }).Add()
+    const cells = row.Cells as { Count: number; Item: (i: number) => Record<string, unknown> }
+    const totalCells = cells.Count
+    let writtenCells = 0
     if (params.data) {
-      const cells = row.Cells as { Count: number; Item: (i: number) => Record<string, unknown> }
-      for (let c = 0; c < params.data.length && c < cells.Count; c++) {
+      for (let c = 0; c < params.data.length && c < totalCells; c++) {
         ;(cells.Item(c + 1).Range as Record<string, unknown>).Text = params.data[c]
+        writtenCells++
       }
     }
+    return { writtenCells, totalCells }
   }
 
   async deleteTableRow(params: DeleteTableRowParams): Promise<void> {
     const table = this.requireTable(params)
+    const rowCount = (table.Rows as { Count: number }).Count
+    if (params.rowIndex < 1 || params.rowIndex > rowCount) {
+      throw new WordMcpError(
+        `Row index ${params.rowIndex} out of range (1-${rowCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${rowCount} row(s).`,
+      )
+    }
     ;(table.Rows as { Item: (i: number) => { Delete: () => void } }).Item(params.rowIndex).Delete()
   }
 
@@ -142,7 +201,7 @@ export class WordTableEditor extends WordBase {
     }
   }
 
-  async setTableShading(params: { tableIndex?: number; color: string; target?: string }): Promise<void> {
+  async setTableShading(params: { tableIndex?: number; color: string; target?: string; rowIndex?: number }): Promise<void> {
     const table = this.requireTable(params)
     const hex = params.color.replace("#", "")
     const r = parseInt(hex.slice(0, 2), 16)
@@ -150,7 +209,16 @@ export class WordTableEditor extends WordBase {
     const b = parseInt(hex.slice(4, 6), 16)
     const wordColor = r + g * 256 + b * 65536
     if (params.target === "row") {
-      const row = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
+      const ri = params.rowIndex ?? 1
+      const rowCount = (table.Rows as { Count: number }).Count
+      if (ri < 1 || ri > rowCount) {
+        throw new WordMcpError(
+          `Row index ${ri} out of range (1-${rowCount})`,
+          "TABLE_INDEX_OUT_OF_RANGE", false,
+          `The table has ${rowCount} row(s).`,
+        )
+      }
+      const row = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(ri)
       ;((row.Shading as Record<string, unknown>).BackgroundPatternColor as number) = wordColor
     } else {
       ;((table.Shading as Record<string, unknown>).BackgroundPatternColor as number) = wordColor
@@ -159,12 +227,21 @@ export class WordTableEditor extends WordBase {
 
   async mergeTableCells(params: { tableIndex?: number; rowStart: number; colStart: number; rowEnd: number; colEnd: number }): Promise<void> {
     const table = this.requireTable(params)
+    this.validateCellIndices(table, params.rowStart, params.colStart)
+    this.validateCellIndices(table, params.rowEnd, params.colEnd)
+    if (params.rowStart > params.rowEnd || params.colStart > params.colEnd) {
+      throw new WordMcpError(
+        "Merge range is invalid: start must be <= end for both row and column",
+        "TABLE_MERGE_INVALID_RANGE", false,
+        "Ensure rowStart ≤ rowEnd and colStart ≤ colEnd.",
+      )
+    }
     const cell1 = (table.Cell as (r: number, c: number) => Record<string, unknown>)(params.rowStart, params.colStart)
     const cell2 = (table.Cell as (r: number, c: number) => Record<string, unknown>)(params.rowEnd, params.colEnd)
     ;(cell1.Merge as (t: unknown) => void)(cell2)
   }
 
-  private applyDefaultBorders(table: Record<string, unknown>): void {
+  static applyDefaultBorders(table: Record<string, unknown>): void {
     try {
       const borders = table.Borders as { Item: (t: number) => Record<string, unknown> }
       const apply = (items: number[], style: number, color: number, width: number) => {
@@ -184,12 +261,28 @@ export class WordTableEditor extends WordBase {
 
   async setColumnWidth(params: { tableIndex?: number; column: number; width: number }): Promise<void> {
     const table = this.requireTable(params)
+    const colCount = (table.Columns as { Count: number }).Count
+    if (params.column < 1 || params.column > colCount) {
+      throw new WordMcpError(
+        `Column index ${params.column} out of range (1-${colCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${colCount} column(s).`,
+      )
+    }
     const col = (table.Columns as { Item: (i: number) => Record<string, unknown> }).Item(params.column)
     ;(col.Width as number) = params.width
   }
 
   async setRowHeight(params: { tableIndex?: number; row: number; height: number }): Promise<void> {
     const table = this.requireTable(params)
+    const rowCount = (table.Rows as { Count: number }).Count
+    if (params.row < 1 || params.row > rowCount) {
+      throw new WordMcpError(
+        `Row index ${params.row} out of range (1-${rowCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${rowCount} row(s).`,
+      )
+    }
     const row = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(params.row)
     ;(row.Height as number) = params.height
   }
@@ -200,6 +293,7 @@ export class WordTableEditor extends WordBase {
     underline?: unknown; color?: unknown; strikethrough?: boolean
   }): Promise<void> {
     const table = this.requireTable(params)
+    this.validateCellIndices(table, params.row, params.column)
     const cell = (table.Cell as (r: number, c: number) => Record<string, unknown>)(params.row, params.column)
     const font = (cell.Range as Record<string, unknown>).Font as Record<string, unknown>
     if (params.name != null) font.Name = params.name
@@ -264,6 +358,14 @@ export class WordTableEditor extends WordBase {
 
   async deleteTableColumn(params: { tableIndex?: number; column: number }): Promise<void> {
     const table = this.requireTable(params)
+    const colCount = (table.Columns as { Count: number }).Count
+    if (params.column < 1 || params.column > colCount) {
+      throw new WordMcpError(
+        `Column index ${params.column} out of range (1-${colCount})`,
+        "TABLE_INDEX_OUT_OF_RANGE", false,
+        `The table has ${colCount} column(s).`,
+      )
+    }
     ;((table.Columns as { Item: (i: number) => { Delete: () => void } }).Item(params.column).Delete)()
   }
 
@@ -271,9 +373,9 @@ export class WordTableEditor extends WordBase {
     tableIndex?: number; row: number; column: number; alignment: unknown
   }): Promise<void> {
     const table = this.requireTable(params)
+    this.validateCellIndices(table, params.row, params.column)
     const cell = (table.Cell as (r: number, c: number) => Record<string, unknown>)(params.row, params.column)
-    ;((cell.Range as Record<string, unknown>).Select as () => void)()
-    ;((this.getSelection().Cells as Record<string, unknown>).VerticalAlignment as number) = this.numOrEnum(params.alignment, WordTableEditor.V_ALIGN)
+    ;(cell.VerticalAlignment as number) = this.numOrEnum(params.alignment, WordTableEditor.V_ALIGN)
   }
 
   async tableToText(params: { tableIndex?: number; separator?: string }): Promise<string> {

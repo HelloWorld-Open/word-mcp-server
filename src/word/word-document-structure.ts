@@ -22,7 +22,7 @@ export class WordDocumentStructure extends WordBase {
       const range = (doc.Range as (s: number, e: number) => Record<string, unknown>)(contentEnd, contentEnd)
       ;(range.Select as () => void)()
       ;((this.getSelection()).Collapse as (d: number) => void)(0)
-      this.session.wasInNonBody = false
+      this.cursor.markInBody()
     } catch { /* ignore */ }
   }
 
@@ -52,7 +52,7 @@ export class WordDocumentStructure extends WordBase {
     this.restoreMainDocCursor()
   }
 
-  async setPageNumbers(target: "header" | "footer"): Promise<void> {
+  async setPageNumbers(target: "header" | "footer", alignment?: unknown): Promise<void> {
     const doc = this.requireDoc()
     const si = this.getLastSectionIndex()
     const section = (doc.Sections as { Item: (i: number) => Record<string, unknown> }).Item(si)
@@ -61,7 +61,9 @@ export class WordDocumentStructure extends WordBase {
       : (section.Footers as { Item: (i: number) => Record<string, unknown> }).Item(1)
     const range = container.Range as Record<string, unknown>
     range.Text = ""
-    ;(range.ParagraphFormat as Record<string, unknown>).Alignment = 1
+    ;(range.ParagraphFormat as Record<string, unknown>).Alignment = alignment != null
+      ? this.numOrEnum(alignment, WordDocumentStructure.ALIGNMENT)
+      : 1
     const fields = range.Fields as { Add: (r: unknown, type: number) => void }
     fields.Add(range, 33)
     this.restoreMainDocCursor()
