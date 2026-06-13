@@ -2,6 +2,12 @@
 
 # Word MCP Server
 
+<p align="center">
+  <a href="./assets/demo/demo.mp4">
+    <img src="./assets/demo/thumbnail.png" alt="点击播放演示视频" width="300">
+  </a>
+</p>
+
 [![CI](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
@@ -87,10 +93,6 @@ npm install && npm run build
 > → 保存到桌面「会议纪要_产品评审.docx」
 
 Agent 会自动打开 Word、写入内容、排版表格、保存——全程实时可见。
-
-## 🎬 演示视频
-
-<video src="https://github.com/HelloWorld-Open/word-mcp-server/raw/main/assets/demo/demo.mp4" controls width="300"></video>
 
 ## ✨ 为什么选择 Word MCP Server
 

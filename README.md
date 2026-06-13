@@ -2,6 +2,12 @@
 
 # Word MCP Server
 
+<p align="center">
+  <a href="./assets/demo/demo.mp4">
+    <img src="./assets/demo/thumbnail.png" alt="Click to play demo video" width="300">
+  </a>
+</p>
+
 [![CI](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
@@ -87,10 +93,6 @@ Paste this into your AI agent and watch it generate a polished document instantl
 > → Save as "Meeting_Minutes_ProductReview.docx" on desktop
 
 Watch Word open and populate in real time — that's the whole point.
-
-## 🎬 Demo
-
-<video src="https://github.com/HelloWorld-Open/word-mcp-server/raw/main/assets/demo/demo.mp4" controls width="300"></video>
 
 ## ✨ Why Word MCP Server
 
