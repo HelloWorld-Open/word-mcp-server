@@ -3,15 +3,21 @@
 # Word MCP Server
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/HelloWorld-Open/word-mcp-server/main/assets/demo/demo.mp4">
-    <img src="./assets/demo/thumbnail.png" alt="Click to play demo video" width="300">
-  </a>
+  <video src="https://github.com/user-attachments/assets/0f8d144b-62bd-4ee7-9c01-c0f71cca05b6" autoplay loop muted playsinline width="300"></video>
 </p>
 
-[![CI](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue)]()
+<p align="center">
+  <a href="https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml">
+    <img src="https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  </a>
+  <a href="https://nodejs.org">
+    <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform">
+</p>
 
 Let your AI agent directly control Microsoft Word — create, edit, and format documents in real time, just like a human typing at the keyboard.
 
@@ -67,32 +73,44 @@ Add to your MCP client config:
 
 Then ask your agent: _"Write a weekly report in Word"_ or _"Generate a contract from this template"_.
 
-### 🎯 Try this
+### 🎯 Try this — configure styles first, then write
 
-Paste this into your AI agent and watch it generate a polished document instantly:
+`word_stream_start` accepts a `baseStyleProfile` parameter to pre-configure any built-in style. The AI sets fonts, sizes, spacing upfront — then writes clean Markdown. Styles are inherited automatically, zero per-paragraph overhead.
 
-> **Create a meeting minutes document**
+Give this to your AI agent:
+
+> **Create a deep learning paper**
 >
-> 1. Title: "Product Requirements Review — 2025.06.12"
->    → Calibri 22pt Bold, center-aligned
-> 2. Write an overview paragraph covering: date (2025-06-12 14:00-16:00), venue (Meeting Room A), attendees (PM, 3 Devs, 2 QAs, 1 Designer), purpose (review Q3 feature backlog, assign sprint owners)
->    → Calibri 11pt, 1.15 line spacing
-> 3. Insert a **4-column × 4-row** table with real data:
->    - Columns: Topic | Decision | Owner | Deadline
->    - Row 1: User Dashboard Redesign | Approved — add edge cases | Alice Zhang | 2025-07-01
->    - Row 2: Push Notification Optimization | Revise technical approach | Bob Li | 2025-06-30
->    - Row 3: Analytics Dashboard v2 | Approved — proceed | Carol Wang | 2025-07-15
->    - Header: Calibri 11pt Bold, #2B579A bg + White text
->    - Body: Calibri 10.5pt, light grid borders
-> 4. Add **3 action items** as a bullet list:
->    - Alice: Submit design doc for User Dashboard by June 20
->    - Bob: Confirm notification solution with backend by June 18
->    - All: Add comments in shared doc by June 16
->    → Calibri 11pt
+> First configure styles, then write the full paper:
 >
-> → Save as "Meeting_Minutes_ProductReview.docx" on desktop
+> ```
+> word_stream_start title:"Attention-Based Transformer for Image Classification" baseStyleProfile:{
+>   "Normal": {"font": {"name": "Times New Roman", "size": 12}, "paragraph": {"lineSpacing": 22, "firstLineIndent": 0.74}},
+>   "Heading 1": {"font": {"name": "Arial", "size": 16, "bold": true}, "paragraph": {"spaceBefore": 18, "spaceAfter": 6, "alignment": "center"}},
+>   "Heading 2": {"font": {"name": "Arial", "size": 14, "bold": true}, "paragraph": {"spaceBefore": 12, "spaceAfter": 6}},
+>   "Heading 3": {"font": {"name": "Arial", "size": 12, "bold": true, "italic": true}, "paragraph": {"spaceBefore": 6, "spaceAfter": 3}}
+> }
+> ```
+>
+> Then write:
+> - **Title**: "Attention-Based Transformer for Image Classification"
+> - **Abstract** (1 paragraph): Summarize that we propose a novel Vision Transformer variant with improved attention mechanism, achieving 92.5% top-1 accuracy on ImageNet with 40% fewer parameters than ViT-Base.
+> - **1. Introduction** (2 paragraphs): Briefly motivate the need for efficient vision transformers; mention the quadratic complexity problem of standard self-attention and our proposed sparse attention approach.
+> - **2. Method** (2 paragraphs + a table):
+>   - Para 1: Describe the overall architecture — patch embedding, transformer encoder with sparse attention, classification head.
+>   - Para 2: Explain the sparse attention mechanism — how we reduce O(n²) to O(n√n) using windowed + global token attention.
+>   - Insert a table comparing our method with baselines:
+>     Model | Parameters | Top-1 Acc | FLOPs
+>     ViT-Base | 86M | 81.8% | 17.6G
+>     Swin-T | 28M | 83.5% | 4.5G
+>     Ours (Tiny) | 12M | 84.2% | 2.1G
+>     Ours (Base) | 52M | 92.5% | 11.3G
+> - **3. Results** (1 paragraph): Summarize key findings — our method outperforms both ViT and Swin Transformer across all model sizes, with significant efficiency gains.
+> - **References**: Inline references like [1], [2] in text
+>
+> → Save as "Transformer_Image_Classification.docx" on desktop
 
-Watch Word open and populate in real time — that's the whole point.
+The AI configures styles once at the start, then writes everything in plain Markdown — formatting (font, size, spacing, bold/italic) inherits automatically.
 
 ## ✨ Why Word MCP Server
 

@@ -114,9 +114,8 @@ export class StreamingMarkdownWriter extends WordBase {
 
     // 应用默认正文样式 + 用户自定义样式配置
     try {
-      this.formatting.modifyStyle("Normal", {
-        font: { name: "微软雅黑" },
-        paragraph: { spaceAfter: 6 },
+      await this.formatting.modifyStyle("Normal", {
+        paragraph: { spaceAfter: 6, firstLineIndent: 0.74 },
       })
     } catch { /* ignore */ }
 

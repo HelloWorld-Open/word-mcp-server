@@ -3,15 +3,21 @@
 # Word MCP Server
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/HelloWorld-Open/word-mcp-server/main/assets/demo/demo.mp4">
-    <img src="./assets/demo/thumbnail.png" alt="点击播放演示视频" width="300">
-  </a>
+  <video src="https://github.com/user-attachments/assets/0f8d144b-62bd-4ee7-9c01-c0f71cca05b6" autoplay loop muted playsinline width="300"></video>
 </p>
 
-[![CI](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue)]()
+<p align="center">
+  <a href="https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml">
+    <img src="https://github.com/HelloWorld-Open/word-mcp-server/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  </a>
+  <a href="https://nodejs.org">
+    <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform">
+</p>
 
 让你的 AI 智能体直接操控 Microsoft Word — 创建、编辑、排版文档，就像真人坐在电脑前操作一样。
 
@@ -67,32 +73,44 @@ npm install && npm run build
 
 然后直接对你的 AI 智能体说：*"帮我写一份周报到 Word"* 或 *"根据这个模板生成一份合同"*。
 
-### 🎯 试试这句话
+### 🎯 试试这句话 — 先配样式，再写内容
 
-配置好后，对 AI 说这句话，即刻生成一份专业会议纪要：
+`word_stream_start` 支持 `baseStyleProfile` 参数，一次性预配置所有内置样式（字体、字号、间距、对齐）。AI 在开头配好样式，然后用纯 Markdown 写内容，格式自动继承，零额外开销。
 
-> **制作一份会议纪要**
+把这段话给 AI：
+
+> **帮我写一篇深度学习论文**
 >
-> 1. 标题：「产品需求评审会 — 2025.06.12」
->    → 微软雅黑 22pt 粗体，居中对齐
-> 2. 正文写一段会议概述：时间（2025年6月12日 14:00-16:00）、地点（3楼会议室A）、参会人（产品经理1人、研发3人、测试2人、设计1人）、会议目的（评审Q3需求，确认Sprint排期）
->    → 等线 12pt，1.5 倍行距
-> 3. 插入一个 **4 列 × 4 行** 表格，填入真实数据：
->    - 列名：评审议题 | 结论 | 负责人 | 截止日期
->    - 第1行：用户中心改版 | 通过评审，需补充异常流程 | 张三 | 2025-07-01
->    - 第2行：消息推送优化 | 技术方案需调整 | 李四 | 2025-06-30
->    - 第3行：数据看板新增 | 通过评审，按计划推进 | 王五 | 2025-07-15
->    - 表头：等线 11pt 粗体，深蓝底 #2B579A + 白字
->    - 内容：等线 10.5pt，轻量网格边框
-> 4. 文末追加 **3 条待办事项** 的项目符号列表：
->    - 张三于6月20日前提交用户中心改版详细设计文档
->    - 李四于6月18日前与后端团队确认消息推送优化方案
->    - 全体参会人员于6月16日前在共享文档中补充反馈意见
->    → 等线 11pt
+> 先配置样式，再写完整论文内容：
 >
-> → 保存到桌面「会议纪要_产品评审.docx」
+> ```
+> word_stream_start title:"Attention-Based Transformer for Image Classification" baseStyleProfile:{
+>   "Normal": {"font": {"name": "Times New Roman", "size": 12}, "paragraph": {"lineSpacing": 22, "firstLineIndent": 0.74}},
+>   "Heading 1": {"font": {"name": "Arial", "size": 16, "bold": true}, "paragraph": {"spaceBefore": 18, "spaceAfter": 6, "alignment": "center"}},
+>   "Heading 2": {"font": {"name": "Arial", "size": 14, "bold": true}, "paragraph": {"spaceBefore": 12, "spaceAfter": 6}},
+>   "Heading 3": {"font": {"name": "Arial", "size": 12, "bold": true, "italic": true}, "paragraph": {"spaceBefore": 6, "spaceAfter": 3}}
+> }
+> ```
+>
+> 然后写入以下内容：
+> - **标题**：Attention-Based Transformer for Image Classification
+> - **摘要**（1段）：提出一种改进注意力机制的 Vision Transformer 变体，在 ImageNet 上达到 92.5% Top-1 准确率，参数量比 ViT-Base 减少 40%。
+> - **1. 引言**（2段）：简述高效视觉 Transformer 的研究动机，分析标准自注意力的二次复杂度问题，介绍本文提出的稀疏注意力方法。
+> - **2. 方法**（2段 + 表格）：
+>   - 第1段：描述整体架构 — 图像分块嵌入、稀疏注意力 Transformer 编码器、分类头。
+>   - 第2段：解释稀疏注意力机制 — 通过窗口注意力 + 全局令牌将 O(n²) 降至 O(n√n)。
+>   - 插入对比表格：
+>     模型 | 参数量 | Top-1 Acc | FLOPs
+>     ViT-Base | 86M | 81.8% | 17.6G
+>     Swin-T | 28M | 83.5% | 4.5G
+>     Ours (Tiny) | 12M | 84.2% | 2.1G
+>     Ours (Base) | 52M | 92.5% | 11.3G
+> - **3. 结果**（1段）：总结核心结论 — 本文方法在所有模型规模上均优于 ViT 和 Swin Transformer，且效率显著提升。
+> - **参考文献**：在正文中以 [1]、[2] 等形式标注引用
+>
+> → 保存到桌面「Transformer_Image_Classification.docx」
 
-Agent 会自动打开 Word、写入内容、排版表格、保存——全程实时可见。
+AI 只需在文档创建时配一次样式，之后全程用 Markdown 写内容，格式自动继承——不用每段手动调字体字号。
 
 ## ✨ 为什么选择 Word MCP Server
 

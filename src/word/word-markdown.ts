@@ -222,6 +222,7 @@ export class WordMarkdown extends WordBase {
         }
       }
       WordTableEditor.applyDefaultBorders(table)
+      try { ;((table.Rows as Record<string, unknown>).Alignment as number) = 1 } catch { /* ignore */ }
       try { ;(table.AutoFitBehavior as (b: number) => void)(1) } catch { /* ignore */ }
       try {
         const headerRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
