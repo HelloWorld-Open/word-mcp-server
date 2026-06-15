@@ -3,7 +3,7 @@ import type { IWordSession } from "./session.js"
 import type { WordMarkdown } from "./word-markdown.js"
 import type { WordApplicationManager } from "./application.js"
 import type { WordFormatting } from "./formatting.js"
-import type { SessionDirector } from "../server/session-director.js"
+import type { IStreamLock } from "./types.js"
 
 import type { StyleProfile } from "./formatting.js"
 
@@ -48,7 +48,7 @@ export class StreamingMarkdownWriter extends WordBase {
     private markdown: WordMarkdown,
     private appManager: WordApplicationManager,
     private formatting: WordFormatting,
-    private director: SessionDirector,
+    private director: IStreamLock,
   ) {
     super(session)
   }
@@ -90,46 +90,52 @@ export class StreamingMarkdownWriter extends WordBase {
     }
     await this.session.start()
 
-    if (params.templatePath) {
-      await this.appManager.createDocumentFromTemplate(params.templatePath, {
-        title: params.title,
-        author: params.author,
-      })
-    } else {
-      await this.appManager.createDocument({
-        title: params.title,
-        author: params.author,
-      })
-    }
+    const lockErr = this.director.acquireStreamLock("word_stream_start")
+    if (lockErr) throw new Error(lockErr)
 
-    if (params.topMargin != null || params.bottomMargin != null ||
-        params.leftMargin != null || params.rightMargin != null ||
-        params.orientation != null) {
-      await this.formatting.setPageSetup({
-        topMargin: params.topMargin, bottomMargin: params.bottomMargin,
-        leftMargin: params.leftMargin, rightMargin: params.rightMargin,
-        orientation: params.orientation,
-      })
-    }
-
-    // 应用默认正文样式 + 用户自定义样式配置
     try {
-      await this.formatting.modifyStyle("Normal", {
-        paragraph: { spaceAfter: 6, firstLineIndent: 0.74 },
-      })
-    } catch { /* ignore */ }
-
-    if (params.baseStyleProfile) {
-      for (const [styleName, profile] of Object.entries(params.baseStyleProfile)) {
-        try {
-          await this.formatting.modifyStyle(styleName, profile)
-        } catch { /* skip invalid styles */ }
+      if (params.templatePath) {
+        await this.appManager.createDocumentFromTemplate(params.templatePath, {
+          title: params.title,
+          author: params.author,
+        })
+      } else {
+        await this.appManager.createDocument({
+          title: params.title,
+          author: params.author,
+        })
       }
+
+      if (params.topMargin != null || params.bottomMargin != null ||
+          params.leftMargin != null || params.rightMargin != null ||
+          params.orientation != null) {
+        await this.formatting.setPageSetup({
+          topMargin: params.topMargin, bottomMargin: params.bottomMargin,
+          leftMargin: params.leftMargin, rightMargin: params.rightMargin,
+          orientation: params.orientation,
+        })
+      }
+
+      // 应用默认正文样式 + 用户自定义样式配置
+      try {
+        await this.formatting.modifyStyle("Normal", {
+          paragraph: { spaceAfter: 6, firstLineIndent: 0.74 },
+        })
+      } catch { /* ignore */ }
+
+      if (params.baseStyleProfile) {
+        for (const [styleName, profile] of Object.entries(params.baseStyleProfile)) {
+          try {
+            await this.formatting.modifyStyle(styleName, profile)
+          } catch { /* skip invalid styles */ }
+        }
+      }
+    } catch (e) {
+      this.director.releaseStreamLock()
+      throw e
     }
 
     this.goToEnd()
-    const lockErr = this.director.acquireStreamLock("word_stream_start")
-    if (lockErr) throw new Error(lockErr)
     this.streamSession = {
       blockCount: 0,
       charCount: 0,
@@ -153,7 +159,7 @@ export class StreamingMarkdownWriter extends WordBase {
       const blockType = this.detectBlockType(text)
       return { blockType, chars: result.chars, blockIndex: this.streamSession.blockCount }
     } catch (e) {
-      this.streamSession.isActive = false
+      this.streamSession = null
       throw e
     }
   }

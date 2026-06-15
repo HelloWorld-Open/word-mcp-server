@@ -1,54 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect } from "vitest"
+import { parseBlocks, parseInline } from "../../../src/word/markdown-parser.js"
+import type { Block, InlineSegment } from "../../../src/word/markdown-parser.js"
 import { WordMarkdown } from "../../../src/word/word-markdown.js"
-import type { IWordSession } from "../../../src/word/session.js"
+import { createMockSession } from "../test-helpers.js"
 
-function createMockSession(): IWordSession {
-  return {
-    application: {} as Record<string, unknown>,
-    activeDoc: null,
-    activeDocPath: null,
-    setActiveDoc: () => {},
-    setActiveDocPath: () => {},
-    ensureAlive: () => {},
-    isAlive: () => false,
-    start: () => {},
-    quit: () => {},
-    setOnLog: () => {},
-    setScreenUpdating: () => {},
-    healthCheck: () => false,
-    recover: async () => {},
-    comCall: <T>(fn: () => T) => fn(),
-    markHealthy: () => {},
-    markUnhealthy: () => {},
-    isUnhealthy: () => false,
-  }
-}
-
-interface Block {
-  type: string
-  level?: number
-  text?: string
-  items?: Array<{ text: string; indent: number }>
-  rows?: string[][]
-}
-
-interface InlineSegment {
-  text: string
-  bold: boolean
-  italic: boolean
-  code: boolean
-  strikethrough: boolean
-  link?: string
-}
-
-describe("WordMarkdown.parseBlocks", () => {
-  let parseBlocks: (markdown: string) => Block[]
-
-  beforeEach(() => {
-    const session = createMockSession()
-    const md = new WordMarkdown(session)
-    parseBlocks = (md as any).parseBlocks.bind(md)
-  })
+describe("parseBlocks", () => {
 
   it("parses empty input to empty blocks", () => {
     expect(parseBlocks("")).toEqual([])
@@ -172,12 +128,10 @@ describe("WordMarkdown.parseBlocks", () => {
     expect(blocks[0].rows![1]).toEqual(["1", "2"])
   })
 
-  it("parses loose table row (isLooseTableRow)", () => {
+  it("parses pipeline paragraph (pipe without leading | is not a table)", () => {
     const blocks = parseBlocks("Name|Age|City\nAlice|30|NYC")
-    expect(blocks[0].type).toBe("table")
-    expect(blocks[0].rows).toHaveLength(2)
-    expect(blocks[0].rows![0]).toEqual(["Name", "Age", "City"])
-    expect(blocks[0].rows![1]).toEqual(["Alice", "30", "NYC"])
+    expect(blocks[0].type).toBe("paragraph")
+    expect(blocks[0].text).toContain("Name|Age|City")
   })
 
   it("skips separator-only rows in table", () => {
@@ -224,14 +178,7 @@ describe("WordMarkdown.parseBlocks", () => {
   })
 })
 
-describe("WordMarkdown.parseInline", () => {
-  let parseInline: (text: string) => InlineSegment[]
-
-  beforeEach(() => {
-    const session = createMockSession()
-    const md = new WordMarkdown(session)
-    parseInline = (md as any).parseInline.bind(md)
-  })
+describe("parseInline", () => {
 
   it("parses plain text into one segment", () => {
     const segs = parseInline("hello world")
@@ -305,41 +252,8 @@ describe("WordMarkdown.parseInline", () => {
 })
 
 describe("WordMarkdown.write (with mock COM)", () => {
-  function createDocSession(): IWordSession {
-    const doc = {
-      Content: { End: 0, Text: "" },
-      Range: vi.fn(() => ({ End: 0 })),
-      Paragraphs: { Count: 0, Item: vi.fn() },
-      Application: { Selection: {} },
-      Tables: { Count: 0, Item: vi.fn() },
-    } as unknown as Record<string, unknown>
-    const sel = {
-      Start: 0, End: 0, StoryType: 1,
-      TypeText: vi.fn(),
-      TypeParagraph: vi.fn(),
-      Collapse: vi.fn(),
-      MoveStart: vi.fn(),
-      Style: "",
-      Font: {},
-      ParagraphFormat: { LeftIndent: 0 },
-      Range: { Text: "", Font: {}, Hyperlinks: { Add: vi.fn() } },
-      InlineShapes: { AddHorizontalLineStandard: vi.fn() },
-      Find: { ClearFormatting: vi.fn(), Execute: vi.fn() },
-      Information: vi.fn(),
-      Tables: { Item: vi.fn() },
-      ShapeRange: { Count: 0 },
-    }
-    const app = { Selection: sel, ScreenUpdating: true, ActiveDocument: doc } as Record<string, unknown>
-    return {
-      ...createMockSession(),
-      application: app,
-      activeDoc: doc,
-      comCall: <T>(fn: () => T) => fn(),
-    }
-  }
-
   it("succeeds with empty input", async () => {
-    const session = createDocSession()
+    const session = createMockSession()
     const md = new WordMarkdown(session)
     const result = await md.writeBlocks("")
     expect(result).toMatchObject({ blocks: 0, chars: 0 })

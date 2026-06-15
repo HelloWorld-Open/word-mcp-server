@@ -8,7 +8,7 @@ import { SecurityManager } from "../../security/policy.js"
 import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 
-function locatorFromArgs(args: Record<string, unknown>): Locator {
+export function locatorFromArgs(args: Record<string, unknown>): Locator {
   const by = (args.by as string) ?? "heading"
   const base: Record<string, unknown> = { by }
 
@@ -16,6 +16,7 @@ function locatorFromArgs(args: Record<string, unknown>): Locator {
     if (args.match != null) base.match = args.match
     if (args.matchMode != null) base.matchMode = args.matchMode
     if (args.occurrence != null) base.occurrence = args.occurrence
+    if (args.level != null) base.level = args.level
   }
 
   if (by === "table") {
@@ -52,6 +53,7 @@ const locatorFields = {
   offsetDirection: z.enum(["before", "after"]).optional().describe("Offset direction from the matched element"),
   offsetCount: z.number().int().min(1).max(1000).optional().describe("Number of paragraphs to offset (default: 1)"),
   name: z.string().min(1).max(255).optional().describe("Bookmark name (required when by='bookmark')"),
+  level: z.number().int().min(1).max(9).optional().describe("Heading level filter (1-9). Applied BEFORE match and occurrence, narrowing to same-level headings only."),
 } as const
 
 export function registerSemanticTools(

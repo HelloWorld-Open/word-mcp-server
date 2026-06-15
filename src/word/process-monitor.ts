@@ -7,6 +7,7 @@ export class ProcessMonitor {
   private _timer: ReturnType<typeof setInterval> | null = null
   private _pendingCheck: boolean = false
   private _destroyed = false
+  private _pid: string | undefined
 
   constructor(intervalMs = 30000) {
     this._intervalMs = intervalMs
@@ -14,6 +15,7 @@ export class ProcessMonitor {
 
   start(): void {
     if (this._timer || this._destroyed) return
+    this._alive = true
     this._check()
     this._timer = setInterval(() => this._check(), this._intervalMs)
   }
@@ -23,6 +25,7 @@ export class ProcessMonitor {
       clearInterval(this._timer)
       this._timer = null
     }
+    this._alive = false
   }
 
   destroy(): void {
@@ -38,6 +41,10 @@ export class ProcessMonitor {
     return this._lastCheck
   }
 
+  getPid(): string | undefined {
+    return this._pid
+  }
+
   async waitForExit(timeoutMs = 30000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
@@ -49,7 +56,6 @@ export class ProcessMonitor {
 
   private _check(): void {
     if (this._pendingCheck || this._destroyed) return
-    if (this._alive) return
     this._pendingCheck = true
     exec(
       'tasklist /FO CSV /NH',
@@ -57,7 +63,20 @@ export class ProcessMonitor {
       (err, stdout) => {
         this._pendingCheck = false
         this._lastCheck = Date.now()
-        this._alive = !err && stdout.toUpperCase().includes("WINWORD.EXE")
+        const found = !err && stdout.toUpperCase().includes("WINWORD.EXE")
+        this._alive = found
+        if (found) {
+          const lines = stdout.split('\n')
+          for (const line of lines) {
+            const m = line.match(/"WINWORD\.EXE","(\d+)"/i)
+            if (m) {
+              this._pid = m[1]
+              break
+            }
+          }
+        } else {
+          this._pid = undefined
+        }
       },
     )
   }

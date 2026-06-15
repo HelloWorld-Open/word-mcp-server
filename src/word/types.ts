@@ -15,3 +15,9 @@ export interface HeadingEntry {
   text: string
   paragraphIndex: number
 }
+
+export interface IStreamLock {
+  acquireStreamLock(toolName: string): string | null
+  releaseStreamLock(): void
+  refreshWatchdog(): void
+}

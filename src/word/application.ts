@@ -62,7 +62,17 @@ export class WordApplicationManager {
   }
 
   private getDoc(): Record<string, unknown> {
-    return (this.session.activeDoc ?? (this.getWord().ActiveDocument as Record<string, unknown>)) as Record<string, unknown>
+    const doc = this.session.activeDoc ?? (() => { try { return this.getWord().ActiveDocument as Record<string, unknown> | undefined } catch { return undefined } })()
+    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document or word_stream_start first.")
+    return doc
+  }
+
+  adoptDocument(path: string, doc: Record<string, unknown>): void {
+    this.session.setActiveDoc(doc)
+    this.session.setActiveDocPath(path || null)
+    if (path && !this.registry.isOpen(path)) {
+      this.registry.register(path, doc)
+    }
   }
 
   isDocumentActive(): boolean {
@@ -181,6 +191,7 @@ export class WordApplicationManager {
 
   async createDocument(params?: { title?: string; author?: string }): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
+    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
     const docs = w.Documents as { Add: () => Record<string, unknown> }
     const doc = docs.Add() as Record<string, unknown>
     try {
@@ -209,6 +220,7 @@ export class WordApplicationManager {
     params?: { title?: string; author?: string },
   ): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
+    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
     const docs = w.Documents as { Add: (t: string) => Record<string, unknown> }
     const doc = docs.Add(templatePath) as Record<string, unknown>
     try {
@@ -242,8 +254,11 @@ export class WordApplicationManager {
       }
     }
     const w = this.getWord()
+    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
+    try { ;(w as Record<string, unknown>).FileValidation = 2 } catch { /* some Word versions lack this */ }
     const docs = w.Documents as { Open: (p: string) => Record<string, unknown> }
     const doc = docs.Open(path) as Record<string, unknown>
+    try { ;(doc as Record<string, unknown>).AutoUpdate = false } catch { /* ignore */ }
     this.session.setActiveDoc(doc)
     this.session.setActiveDocPath(path)
     this.registry.register(path, doc)
@@ -260,7 +275,7 @@ export class WordApplicationManager {
         if (existsSync(tempPath)) {
           copyFileSync(tempPath, bakPath)
         }
-      } catch { /* skip backup */ }
+      } catch (e) { console.error("[saveDocument] backup failed:", e) }
       ;(doc.SaveAs as (p: string, f: number) => void)(tempPath, 16)
       this.session.setActiveDoc(doc)
       this.session.setActiveDocPath(tempPath)
@@ -271,7 +286,7 @@ export class WordApplicationManager {
         if (existsSync(origPath)) {
           copyFileSync(origPath, bakPath)
         }
-      } catch { /* skip backup */ }
+      } catch (e) { console.error("[saveDocument] backup failed:", e) }
       ;(doc.Save as () => void)()
       this.session.setActiveDocPath(doc.FullName as string)
     }
@@ -285,7 +300,7 @@ export class WordApplicationManager {
       if (existsSync(path)) {
         copyFileSync(path, bakPath)
       }
-    } catch { /* skip backup */ }
+    } catch (e) { console.error("[saveDocumentAs] backup failed:", e) }
     ;(doc.SaveAs as (p: string, f: number) => void)(path, f)
     this.session.setActiveDoc(doc)
     this.session.setActiveDocPath(path)
@@ -294,12 +309,39 @@ export class WordApplicationManager {
   }
 
   async closeDocument(saveChanges?: boolean): Promise<void> {
-    const doc = this.getDoc()
     const path = this.session.activeDocPath
-    ;(doc.Close as (s: boolean) => void)(saveChanges ?? false)
+    const prevDoc = this.session.activeDoc
+
+    // 关闭 COM 文档；异常时仍然执行状态清理
+    try {
+      const doc = prevDoc ?? (() => {
+        try { return this.getWord().ActiveDocument as Record<string, unknown> | undefined } catch { return undefined }
+      })()
+      if (doc) {
+        ;(doc.Close as (s: boolean) => void)(saveChanges ?? false)
+      }
+    } catch {
+      // COM close 异常 — 继续清理内存状态
+    }
+
+    // 清理已追踪的状态
     if (path) this.registry.unregister(path)
     this.session.setActiveDoc(null)
     this.session.setActiveDocPath(null)
+
+    // 后处理：接管剩余文档（Count > 0 时自动切换 activeDoc）
+    try {
+      const word = this.getWord()
+      const docs = word.Documents as { Count: number; Item: (i: number) => Record<string, unknown> }
+      if (docs.Count > 0) {
+        const nextDoc = word.ActiveDocument as Record<string, unknown> | undefined
+        if (nextDoc) {
+          const nextPath = (nextDoc.FullName as string) ?? (nextDoc.Name as string) ?? ""
+          this.adoptDocument(nextPath, nextDoc)
+        }
+      }
+      // Count == 0: 保留 Word 空白窗口（原生语义，不隐藏）
+    } catch { /* ignore */ }
   }
 
   async quit(): Promise<void> {

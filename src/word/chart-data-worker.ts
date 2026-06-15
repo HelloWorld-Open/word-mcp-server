@@ -37,9 +37,14 @@ function setChartData(params: ChartTask["params"]): { ok: boolean; series: numbe
   let doc: Record<string, unknown> | null = null
   for (let i = 1; i <= docs.Count; i++) {
     const d = docs.Item(i)
-    if ((d.Name as string) === params.docName) {
+    const fullName = (d.FullName as string) || ""
+    const name = (d.Name as string) || ""
+    if (fullName && fullName.endsWith(params.docName)) {
       doc = d
       break
+    }
+    if (name === params.docName) {
+      doc = d
     }
   }
   if (!doc) throw new Error(`Document not found: ${params.docName}`)
@@ -71,7 +76,7 @@ function setChartData(params: ChartTask["params"]): { ok: boolean; series: numbe
     }
   }
   const seriesCount = params.data[0] ? params.data[0].length - 1 : 0
-  return { ok: true, series: Math.max(1, seriesCount) }
+  return { ok: true, series: seriesCount }
 }
 
 process.on("message", (msg: unknown) => {

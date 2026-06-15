@@ -1,7 +1,11 @@
 import { WordBase } from "./word-base.js"
+import type { WordFormatting } from "./formatting.js"
 import { WordMcpError } from "../security/errors.js"
 
 export class WordTextEditor extends WordBase {
+  constructor(session: import("./session.js").IWordSession, private formatting?: WordFormatting) {
+    super(session)
+  }
   private static readonly GOTO_ITEM: Record<string, number> = {
     page: 1, section: 2, line: 3, bookmark: 4, comment: 5, footnote: 6, endnote: 7,
     field: 8, table: 9, graphic: 10, equation: 11, object: 12, heading: 13,
@@ -57,7 +61,7 @@ export class WordTextEditor extends WordBase {
   async findReplace(
     findText: string,
     replaceWith: string,
-    options?: { matchCase?: boolean; matchWholeWord?: boolean; replaceAll?: boolean }
+    options?: { matchCase?: boolean; matchWholeWord?: boolean; replaceAll?: boolean; wrap?: boolean }
   ): Promise<void> {
     const find = this.getSelection().Find as Record<string, unknown>
     ;(find.ClearFormatting as () => void)()
@@ -66,10 +70,11 @@ export class WordTextEditor extends WordBase {
     if (options?.matchCase != null) find.MatchCase = !!options.matchCase
     if (options?.matchWholeWord != null) find.MatchWholeWord = !!options.matchWholeWord
     const replaceMode = options?.replaceAll !== false ? 2 : 1
+    const wrap = options?.wrap !== false ? 1 : 0
     this.collapseSelection()
     ;(find.Execute as (...args: unknown[]) => void)(
       findText, !!options?.matchCase, !!options?.matchWholeWord,
-      false, false, false, true, 1, false, replaceWith, replaceMode
+      false, false, false, true, wrap, false, replaceWith, replaceMode
     )
   }
 
@@ -181,6 +186,7 @@ export class WordTextEditor extends WordBase {
   async insertList(type: "bullet" | "number", items: string[]): Promise<void> {
     this.collapseSelection()
     const sel = this.getSelection()
+    const word = this.getWord()
     const applyList = () => {
       const lf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
       if (type === "bullet") {
@@ -193,16 +199,29 @@ export class WordTextEditor extends WordBase {
       const lf = (sel.Range as Record<string, unknown>).ListFormat as Record<string, unknown>
       ;(lf.RemoveNumbers as () => void)()
     }
-    applyList()
-    for (let i = 0; i < items.length; i++) {
-      ;(sel.TypeText as (t: string) => void)(items[i])
-      if (i < items.length - 1) {
-        if (items.length > 1) await this.sleep(4)
-        ;(sel.TypeParagraph as () => void)()
+    try {
+      try { word.ScreenUpdating = false } catch { /* ignore */ }
+      applyList()
+      const TIME_BUDGET = 50
+      let batchStart = Date.now()
+      for (let i = 0; i < items.length; i++) {
+        ;(sel.TypeText as (t: string) => void)(items[i])
+        if (i < items.length - 1) {
+          ;(sel.TypeParagraph as () => void)()
+        }
+        if (i < items.length - 1 && Date.now() - batchStart >= TIME_BUDGET) {
+          try { word.ScreenUpdating = true } catch { /* ignore */ }
+          try { ;(word.ScreenRefresh as () => void)() } catch { /* ignore */ }
+          await new Promise(resolve => setImmediate(resolve))
+          try { word.ScreenUpdating = false } catch { /* ignore */ }
+          batchStart = Date.now()
+        }
       }
+      ;(sel.TypeParagraph as () => void)()
+      removeList()
+    } finally {
+      try { word.ScreenUpdating = true } catch { /* ignore */ }
     }
-    ;(sel.TypeParagraph as () => void)()
-    removeList()
   }
 
   async addHyperlink(
@@ -232,9 +251,23 @@ export class WordTextEditor extends WordBase {
     this.collapseSelection()
     const doc = this.requireDoc()
     const footnotes = doc.Footnotes as { Add: (range: unknown, text: string) => void }
-    footnotes.Add(this.getSelection().Range, text)
-    const sel = this.getSelection()
-    ;(sel.EndKey as (u: number) => void)(6)
+    await this.session.withScreenOff(async () => {
+      try {
+        footnotes.Add(this.getSelection().Range, text)
+      } catch {
+        // COM 失败回退：在文档末尾写入脚注标记文本
+        try {
+          this.formatting?.resetParagraphStyle()
+          this.cursor.goToEnd()
+          const sel = this.getSelection()
+          ;(sel.TypeText as (t: string) => void)(`[脚注: ${text}]`)
+        } catch { /* ignore */ }
+      }
+    })
+    const end = (doc.Content as Record<string, unknown>).End as number
+    const endRange = (doc.Range as (s: number, e: number) => Record<string, unknown>)(end, end)
+    ;(endRange.Select as () => void)()
+    ;(this.getSelection().Collapse as (d: number) => void)(0)
   }
 
   async insertSectionBreak(type?: string): Promise<void> {

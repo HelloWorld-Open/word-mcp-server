@@ -25,6 +25,7 @@ import { registerStructureTools } from "./tools/structure.js"
 import { registerReaderTools } from "./tools/reader.js"
 import { registerVariableTool } from "./tools/variable.js"
 import { registerSemanticTools } from "./tools/semantic.js"
+import { registerBatchTools } from "./tools/batch.js"
 import { registerManagerTools } from "./tools/manager.js"
 import { StreamingMarkdownWriter } from "../word/word-stream-writer.js"
 import { registerStreamTools } from "./tools/stream.js"
@@ -62,16 +63,19 @@ export async function createServer(options: CreateServerOptions): Promise<void> 
   const appManager = new WordApplicationManager(session)
   const positionMap = new PositionMap(session)
   const docOps = new WordDocument(session, positionMap)
-  const textEditor = new WordTextEditor(session)
-  const tableEditor = new WordTableEditor(session)
+  const formatting = new WordFormatting(session)
+  const textEditor = new WordTextEditor(session, formatting)
+  const tableEditor = new WordTableEditor(session, formatting)
   const chartBridge = new ChartDataBridge()
   const mediaEditor = new WordMediaEditor(session, chartBridge)
   const documentStructure = new WordDocumentStructure(session)
-  const formatting = new WordFormatting(session)
   const markdown = new WordMarkdown(session)
   const variableReplacer = new VariableReplacer(session)
   const security = new SecurityManager()
-  const director = new SessionDirector(session, positionMap)
+  const director = new SessionDirector(session, positionMap, appManager)
+  director.setOnLog((level, message) => {
+    log(`[director/${level}] ${message}`)
+  })
   const context: ServerContext = { session, positionMap, director }
   const streamWriter = new StreamingMarkdownWriter(
     session, markdown, appManager, formatting, director,
@@ -109,6 +113,7 @@ export async function createServer(options: CreateServerOptions): Promise<void> 
   registerVariableTool(server, context, variableReplacer, security)
   registerReaderTools(server, context, docOps, security)
   registerSemanticTools(server, context, textEditor, tableEditor, markdown, positionMap, security)
+  registerBatchTools(server, context, textEditor, tableEditor, markdown, positionMap, security)
   registerManagerTools(server, context, tableEditor, mediaEditor, documentStructure, textEditor, security)
   registerStreamTools(server, context, streamWriter, security)
 

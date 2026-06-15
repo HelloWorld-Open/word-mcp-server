@@ -25,7 +25,7 @@ Sections: ${sections}
 Style: ${style}
 
 Use these tools in order:
-1. word_stream_start — create the document with title "${title}"
+1. word_stream_start — create the document with title "${title}" and baseStyleProfile pre-configuring fonts/spacing for Normal, Heading 1~3
 2. word_set_properties — set author and metadata
 3. word_stream_block — write all section content as markdown
 4. word_mgr_set_header — add header with report title

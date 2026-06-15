@@ -1,12 +1,12 @@
 import type { IWordSession } from "./session.js"
-import { CursorPosition } from "./cursor-position.js"
+import { ContextSanitizer, type ICursorContext } from "./context-sanitizer.js"
 import { WordMcpError } from "../security/errors.js"
 
 export class WordBase {
-  protected cursor: CursorPosition
+  protected cursor: ICursorContext
 
-  constructor(protected session: IWordSession) {
-    this.cursor = new CursorPosition(session)
+  constructor(protected session: IWordSession, cursor?: ICursorContext) {
+    this.cursor = cursor ?? new ContextSanitizer(session)
   }
 
   protected numOrEnum<T>(val: unknown, map: Record<string, T>): T | number {
@@ -22,9 +22,13 @@ export class WordBase {
 
   protected getSelection(): Record<string, unknown> {
     this.cursor.markSelectionRead()
-    return this.session.comCall(() =>
+    const sel = this.session.comCall(() =>
       (this.getWord().Selection as Record<string, unknown>) as Record<string, unknown>
     )
+    if (!sel) {
+      throw new Error("COM Selection proxy returned null — Word COM connection may be transiently unavailable")
+    }
+    return sel
   }
 
   protected requireSelection(): void {

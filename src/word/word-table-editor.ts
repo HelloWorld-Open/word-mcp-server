@@ -1,4 +1,5 @@
 import { WordBase } from "./word-base.js"
+import type { WordFormatting } from "./formatting.js"
 import { WordMcpError } from "../security/errors.js"
 
 interface InsertTableParams {
@@ -18,6 +19,9 @@ interface DeleteTableRowParams {
 }
 
 export class WordTableEditor extends WordBase {
+  constructor(session: import("./session.js").IWordSession, private formatting?: WordFormatting) {
+    super(session)
+  }
   private static readonly AUTO_FIT: Record<string, number> = {
     fixed: 0, contents: 1, window: 2,
   }
@@ -38,6 +42,7 @@ export class WordTableEditor extends WordBase {
 
   async insertTable(params: InsertTableParams): Promise<{ rows: number; columns: number; failCount: number }> {
     this.collapseSelection()
+    this.formatting?.resetParagraphStyle()
     const doc = this.requireDoc()
     const sel = this.getSelection()
     const tables = doc.Tables as { Add: (r: unknown, rows: number, cols: number) => Record<string, unknown> }
@@ -47,6 +52,8 @@ export class WordTableEditor extends WordBase {
     }
     let failCount = 0
     if (params.data) {
+      const TIME_BUDGET = 50
+      let batchStart = Date.now()
       for (let r = 0; r < params.data.length && r < params.rows; r++) {
         const row = params.data[r]
         for (let c = 0; c < row.length && c < params.columns; c++) {
@@ -55,6 +62,10 @@ export class WordTableEditor extends WordBase {
             const cellRange = cellObj.Range as Record<string, unknown>
             cellRange.Text = row[c]
           } catch { failCount++ }
+        }
+        if (Date.now() - batchStart >= TIME_BUDGET) {
+          await new Promise(resolve => setImmediate(resolve))
+          batchStart = Date.now()
         }
       }
     }
@@ -125,6 +136,9 @@ export class WordTableEditor extends WordBase {
     let failCount = 0
     const dataRows = params.data.length
     const dataCols = params.data.reduce((m, r) => Math.max(m, r.length), 0)
+
+    const TIME_BUDGET = 50
+    let batchStart = Date.now()
     for (let r = 0; r < dataRows && r < rows; r++) {
       for (let c = 0; c < params.data[r].length && c < cols; c++) {
         try {
@@ -133,7 +147,12 @@ export class WordTableEditor extends WordBase {
           cellRange.Text = params.data[r][c]
         } catch { failCount++ }
       }
+      if (Date.now() - batchStart >= TIME_BUDGET) {
+        await new Promise(resolve => setImmediate(resolve))
+        batchStart = Date.now()
+      }
     }
+
     return { rows, columns: cols, failCount, truncatedRows: dataRows > rows ? dataRows - rows : 0, truncatedCols: dataCols > cols ? dataCols - cols : 0 }
   }
 

@@ -1,5 +1,9 @@
+import { exec } from "node:child_process"
+import { readdirSync, statSync, unlinkSync } from "node:fs"
+import { join } from "node:path"
 import { createRequire } from "node:module"
 import { ProcessMonitor } from "./process-monitor.js"
+import { TransientComError, FatalComError } from "./com-errors.js"
 
 const require = createRequire(import.meta.url)
 
@@ -19,12 +23,26 @@ export interface IWordSession {
   quit(): void
   setOnLog(handler: (level: string, message: string) => void): void
   setScreenUpdating(on: boolean): void
+  withScreenOff<T>(fn: () => Promise<T>): Promise<T>
   healthCheck(): boolean
   recover(): Promise<void>
   comCall<T>(fn: () => T): T
   markHealthy(): void
   markUnhealthy(): void
   isUnhealthy(): boolean
+}
+
+const TRANSIENT_HRESULTS = new Set([
+  0x80010005, // RPC_E_CALL_REJECTED
+  0x80010108, // RPC_E_SERVER_DIED
+  0x800AC472, // CO_E_OBJNOTCONNECTED
+  0x800706BA, // RPC_S_SERVER_UNAVAILABLE
+  0x80010001, // RPC_E_SERVERFAULT
+])
+
+function isTransientComError(err: unknown): boolean {
+  const code = (err as Record<string, unknown>)?.number ?? (err as Record<string, unknown>)?.code
+  return typeof code === "number" && TRANSIENT_HRESULTS.has(code)
 }
 
 function defaultWinaxLoader(): WinaxModule {
@@ -50,14 +68,34 @@ export class WordSession implements IWordSession {
     this.onLog = handler
   }
 
+  private _cleanupRecoveryFiles(): void {
+    const MAX_AGE_MS = 120 * 60 * 1000
+    const now = Date.now()
+    const dirs = [join(process.env.APPDATA ?? "", "Microsoft", "Word")]
+    for (const dir of dirs) {
+      let files: string[]
+      try { files = readdirSync(dir) } catch { continue }
+      for (const f of files) {
+        if (!f.endsWith(".asd")) continue
+        try {
+          const fp = join(dir, f)
+          const stat = statSync(fp)
+          if (now - stat.mtimeMs > MAX_AGE_MS) unlinkSync(fp)
+        } catch { /* skip locked or inaccessible */ }
+      }
+    }
+  }
+
   start(): void {
     if (this.word) return
+    this._cleanupRecoveryFiles()
     this.monitor.start()
     this.onLog?.("info", "Creating Word.Application via winax")
     const app = new this.winaxMod.Object("Word.Application") as Record<string, unknown>
-    app.Visible = true
-    app.DisplayAlerts = 0
     app.AutomationSecurity = 3
+    app.DisplayAlerts = 0
+    try { ;(app as any).ShowStartupDialog = false } catch { /* Word 2013+ only */ }
+    try { ;(app as any).Visible = true } catch (e) { this.onLog?.("warn", `Visible=true failed: ${e}`) }
     this.word = app
     this._unhealthy = false
     this.onLog?.("info", "Word.Application created successfully")
@@ -69,7 +107,7 @@ export class WordSession implements IWordSession {
 
   get application(): Record<string, unknown> {
     if (this._unhealthy && !this._recovering) {
-      throw new Error("Session is unhealthy - recovery must be triggered via health check pipeline")
+      throw new FatalComError("Session is unhealthy - recovery must be triggered via health check pipeline")
     }
     this.ensureAlive()
     return this.word!
@@ -105,34 +143,21 @@ export class WordSession implements IWordSession {
 
   quit(): void {
     this.monitor.stop()
-    // 先检查 Word 进程是否还活着，不做 COM 调用
-    const processAlive = this.healthCheck()
 
-    if (!processAlive) {
-      // Word 进程已死，只需清理内存状态
-      this._activeDoc = null
-      this._activeDocPath = null
-      this.word = null
-      this._unhealthy = false
-      return
-    }
-
-    // Word 进程活着，尝试正常 COM 退出
+    // Always try COM Quit
     if (this.word) {
       try {
-        const docs = this.word.Documents as { Count: number }
-        if (docs.Count > 0) {
-          for (let i = docs.Count; i >= 1; i--) {
-            try {
-              const doc = (this.word.Documents as { Item: (i: number) => Record<string, unknown> }).Item(i)
-              const isSaved = doc.Saved as boolean
-              if (!isSaved) {
-                this.onLog?.("warn", `Closing unsaved document: ${(doc.Name as string) ?? "unknown"}`)
-              }
-              ;(doc.Close as (s: boolean) => void)(false)
-            } catch {
-              // ignore per-doc cleanup errors
+        const docs = this.word.Documents as { Count: number; Item: (i: number) => Record<string, unknown> }
+        while (docs.Count > 0) {
+          try {
+            const doc = docs.Item(1) as Record<string, unknown>
+            const isSaved = (doc.Saved as boolean) ?? true
+            if (!isSaved) {
+              this.onLog?.("warn", `Closing unsaved document: ${(doc.Name as string) ?? "unknown"}`)
             }
+            ;(doc.Close as (s: boolean) => void)(false)
+          } catch {
+            break
           }
         }
         ;(this.word.Quit as () => void)()
@@ -149,12 +174,15 @@ export class WordSession implements IWordSession {
       this._activeDocPath = null
     }
 
-    // 强制清理 COM 退出后的残留 WINWORD.EXE
-    try {
-      const { execSync } = require("node:child_process") as { execSync: (cmd: string, opts: { timeout: number; stdio: string }) => Buffer }
-      execSync("taskkill /F /IM WINWORD.EXE", { timeout: 5000, stdio: "ignore" })
-    } catch (e) {
-      this.onLog?.("warn", `Force-kill WINWORD.EXE failed (normal if already exited): ${e}`)
+    // Fallback: kill by PID if process still running
+    const pid = this.monitor.getPid()
+    if (pid) {
+      try {
+        exec(`taskkill /PID ${pid} /F /T`, { timeout: 5000 })
+        this.onLog?.("info", `Killed WINWORD.EXE (PID: ${pid})`)
+      } catch {
+        // process already dead — ignore
+      }
     }
   }
 
@@ -165,20 +193,16 @@ export class WordSession implements IWordSession {
   isAlive(): boolean {
     if (!this.word) return false
 
-    // COM 存活检查: Version 属性（~5ms，不比 tasklist 慢且不依赖外部进程）
-    try {
-      const v = (this.word as Record<string, unknown>).Version
-      if (v === undefined) {
-        this.onLog?.("warn", "COM Version returned undefined — stale COM state")
-        throw new Error("stale com")
-      }
-      this._unhealthy = false
-      return true
-    } catch {
+    // 进程级检查（无 COM 调用，避免死进程 COM 挂起 30-60s）
+    if (!this.monitor.isAlive()) {
+      this.onLog?.("warn", "Process-level check: WINWORD.EXE not found — stale COM proxy")
       this.word = null
       this._unhealthy = true
       return false
     }
+
+    this._unhealthy = false
+    return true
   }
 
   async recover(): Promise<void> {
@@ -198,8 +222,11 @@ export class WordSession implements IWordSession {
       try { ;(oldWord.Release as () => void)() } catch { /* ignore */ }
     }
 
-    // 3. 等待 COM 释放完成（通过 monitor 异步轮询，≤3s）
-    await this.monitor.waitForExit(10000)
+    // 3. 等待 COM 释放完成（仅当 monitor 至少完成过一次检查时）
+    //    跳过从未检查过的场景（测试环境或从未成功启动过），避免乐观 _alive 导致死等
+    if (this.monitor.lastCheckTime() > 0) {
+      await this.monitor.waitForExit(10000)
+    }
 
     // 4. 新建 COM 会话
     this._unhealthy = false
@@ -214,9 +241,13 @@ export class WordSession implements IWordSession {
       this._unhealthy = false
       return result
     } catch (err) {
-      this._unhealthy = true
-      this.onLog?.("warn", `COM call failed: ${err instanceof Error ? err.message : String(err)}`)
-      throw err
+      const msg = err instanceof Error ? err.message : String(err)
+      this.onLog?.("warn", `COM call failed: ${msg}`)
+      if (!isTransientComError(err) || !this.monitor.isAlive()) {
+        this._unhealthy = true
+        throw new FatalComError(msg)
+      }
+      throw new TransientComError(msg)
     }
   }
 
@@ -225,5 +256,15 @@ export class WordSession implements IWordSession {
     try {
       ;(this.word as Record<string, unknown>).ScreenUpdating = on
     } catch { /* ignore if Word not ready */ }
+  }
+
+  async withScreenOff<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.word) return fn()
+    try {
+      try { ;(this.word as Record<string, unknown>).ScreenUpdating = false } catch { /* ignore */ }
+      return await fn()
+    } finally {
+      try { ;(this.word as Record<string, unknown>).ScreenUpdating = true } catch { /* ignore */ }
+    }
   }
 }

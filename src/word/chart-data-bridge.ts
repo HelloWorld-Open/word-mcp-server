@@ -19,6 +19,7 @@ export class ChartDataBridge implements IChartDataBridge {
   private worker: ChildProcess | null = null
   private pending: Map<number, { resolve: (v: { ok: boolean; series: number }) => void; timer: ReturnType<typeof setTimeout> }> = new Map()
   private idleTimer: ReturnType<typeof setTimeout> | null = null
+  private restartBlockedUntil = 0
 
   setChartData(docName: string, inlineIndex: number, data: (string | number)[][]): Promise<{ ok: boolean; series: number }> {
     const id = nextTaskId++
@@ -52,6 +53,8 @@ export class ChartDataBridge implements IChartDataBridge {
 
   private ensureWorker(): ChildProcess {
     if (this.worker && !this.worker.killed) return this.worker
+    const wait = this.restartBlockedUntil - Date.now()
+    if (wait > 0) throw new Error(`Worker restart throttled (${wait}ms remaining)`)
     const workerPath = resolve(__dirname, "chart-data-worker.js")
     const child = fork(workerPath, [], {
       stdio: ["pipe", "pipe", "inherit", "ipc"],
@@ -73,6 +76,7 @@ export class ChartDataBridge implements IChartDataBridge {
     })
     child.on("exit", () => {
       this.worker = null
+      this.restartBlockedUntil = Date.now() + 1000
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timer)
         pending.resolve({ ok: false, series: 1 })
@@ -81,6 +85,7 @@ export class ChartDataBridge implements IChartDataBridge {
     })
     child.on("error", () => {
       this.worker = null
+      this.restartBlockedUntil = Date.now() + 1000
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timer)
         pending.resolve({ ok: false, series: 1 })
@@ -88,6 +93,7 @@ export class ChartDataBridge implements IChartDataBridge {
       this.pending.clear()
     })
     child.stdout?.on("data", () => { })
+    child.stdout?.on("error", () => { })
     this.worker = child
     this.resetIdleTimer()
     return child
@@ -106,6 +112,10 @@ export class ChartDataBridge implements IChartDataBridge {
 
   private terminateWorker(): void {
     if (this.worker && !this.worker.killed) {
+      if (this.worker.stdout) {
+        this.worker.stdout.removeAllListeners("data")
+        this.worker.stdout.removeAllListeners("error")
+      }
       try {
         this.worker.send({ id: -1, params: null })
       } catch { }

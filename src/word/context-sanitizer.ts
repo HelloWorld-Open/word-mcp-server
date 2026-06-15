@@ -1,12 +1,38 @@
 import type { IWordSession } from "./session.js"
 
-export class CursorPosition {
+export interface ICursorContext {
+  ensureMainBody(): void
+  markInBody(): void
+  markSelectionRead(): void
+  goToEnd(): void
+  reset(): void
+}
+
+export class ContextSanitizer implements ICursorContext {
+  private static readonly WD_WITHIN_TABLE = 12
+
   private wasInNonBody = false
   private cachedStart = -1
   private cachedEnd = -1
   private collapseReady = false
 
   constructor(private session: IWordSession) {}
+
+  // ===================== Static text sanitizers =====================
+
+  static cleanCellText(text: string): string {
+    return text.replace(/[\r\x07]+$/, "")
+  }
+
+  static sanitizeText(text: string): string {
+    return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+  }
+
+  static stripBel(text: string): string {
+    return text.replace(/[\r\x07]+$/, "")
+  }
+
+  // ===================== Cursor context management =====================
 
   ensureMainBody(): void {
     try {
@@ -42,15 +68,13 @@ export class CursorPosition {
         this.wasInNonBody = false
       }
 
-      const wdWithInTable = 12
       try {
-        if ((sel.Information as (t: number) => boolean)(wdWithInTable)) {
+        if ((sel.Information as (t: number) => boolean)(ContextSanitizer.WD_WITHIN_TABLE)) {
           const table = (sel.Tables as { Item: (i: number) => Record<string, unknown> }).Item(1)
           ;((table.Range as Record<string, unknown>).Select as () => void)()
           ;((this.getSelection()).Collapse as (d: number) => void)(0)
         }
-      } catch {
-      }
+      } catch { /* table check may fail */ }
 
       try {
         const shapes = sel.ShapeRange as { Count: number } | undefined
@@ -60,9 +84,8 @@ export class CursorPosition {
           ;(endRange.Select as () => void)()
           ;((this.getSelection()).Collapse as (d: number) => void)(0)
         }
-      } catch { }
-    } catch {
-    }
+      } catch { /* shape check may fail */ }
+    } catch { /* ignore */ }
   }
 
   markInBody(): void {
@@ -82,7 +105,7 @@ export class CursorPosition {
       const end = (doc.Content as Record<string, unknown>).End as number
       const rng = (doc.Range as (s: number, e: number) => Record<string, unknown>)(end, end)
       ;(rng.Select as () => void)()
-    } catch { }
+    } catch { /* ignore */ }
   }
 
   reset(): void {
@@ -92,11 +115,17 @@ export class CursorPosition {
     this.wasInNonBody = false
   }
 
+  // ===================== Private COM helpers =====================
+
   private getSelection(): Record<string, unknown> {
     this.collapseReady = false
-    return this.session.comCall(() =>
+    const sel = this.session.comCall(() =>
       (this.getWord().Selection as Record<string, unknown>) as Record<string, unknown>
-    )
+    ) as Record<string, unknown>
+    if (!sel) {
+      throw new Error("COM Selection proxy returned null — Word COM connection may be transiently unavailable")
+    }
+    return sel
   }
 
   private getWord(): Record<string, unknown> {

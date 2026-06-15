@@ -1,4 +1,5 @@
 import { WordBase } from "./word-base.js"
+import { ContextSanitizer } from "./context-sanitizer.js"
 
 export class WordDocumentStructure extends WordBase {
   private static readonly ALIGNMENT: Record<string, number> = {

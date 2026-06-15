@@ -2,6 +2,7 @@ import type { IWordSession } from "./session.js"
 import type { DocumentInfo, HeadingEntry } from "./types.js"
 import type { PositionMap } from "./position-map.js"
 import { WordMcpError } from "../security/errors.js"
+import { ContextSanitizer } from "./context-sanitizer.js"
 
 export class WordDocument {
   constructor(
@@ -19,7 +20,7 @@ export class WordDocument {
     return this.requireDoc()
   }
 
-  async getInfo(): Promise<DocumentInfo> {
+  getInfo(): DocumentInfo {
     const doc = this.getDoc()
     const stat = (n: number): number => {
       try { return (doc.ComputeStatistics as (s: number) => number)(n) as number } catch { return 0 }
@@ -43,14 +44,14 @@ export class WordDocument {
     }
   }
 
-  async getFullText(): Promise<string> {
+  getFullText(): string {
     const doc = this.getDoc()
     const content = doc.Content as Record<string, unknown>
     const text = (content.Text as string) ?? ""
     return text
   }
 
-  async getParagraphText(index: number): Promise<string> {
+  getParagraphText(index: number): string {
     const doc = this.getDoc()
     const paras = doc.Paragraphs as unknown as { Count: number; Item: (i: number) => Record<string, unknown> }
     const total = paras.Count as number
@@ -63,10 +64,10 @@ export class WordDocument {
       )
     }
     const p = paras.Item(index)
-    return ((p.Range as Record<string, unknown>).Text as string ?? "").replace(/\r?\n$/, "")
+    return ContextSanitizer.stripBel((p.Range as Record<string, unknown>).Text as string ?? "")
   }
 
-  async getTableData(tableIndex: number): Promise<{ tableCount: number; rows: number; columns: number; data: string[][] }> {
+  getTableData(tableIndex: number): { tableCount: number; rows: number; columns: number; data: string[][] } {
     const doc = this.getDoc()
     const tables = doc.Tables as { Count: number; Item: (i: number) => Record<string, unknown> }
     const tableCount = tables.Count as number
@@ -100,7 +101,7 @@ export class WordDocument {
     return { tableCount, rows, columns, data }
   }
 
-  async getComments(): Promise<{ author: string; text: string; index: number }[]> {
+  getComments(): { author: string; text: string; index: number }[] {
     const doc = this.getDoc()
     const comments = doc.Comments as { Count: number; Item: (i: number) => Record<string, unknown> }
     const count = comments.Count as number
@@ -116,7 +117,7 @@ export class WordDocument {
     return result
   }
 
-  async getBookmarks(): Promise<{ name: string; index: number }[]> {
+  getBookmarks(): { name: string; index: number }[] {
     const doc = this.getDoc()
     const bookmarks = doc.Bookmarks as { Count: number; Item: (i: number) => Record<string, unknown> }
     const count = bookmarks.Count as number
@@ -128,10 +129,10 @@ export class WordDocument {
     return result
   }
 
-  async getLists(): Promise<{
+  getLists(): {
     listCount: number
     lists: { type: string; items: { level: number; text: string; prefix: string }[] }[]
-  }> {
+  } {
     const doc = this.getDoc()
     const lists = doc.Lists as { Count: number; Item: (i: number) => Record<string, unknown> }
     const listCount = lists.Count as number
@@ -159,13 +160,13 @@ export class WordDocument {
     return { listCount, lists: result }
   }
 
-  async getSections(): Promise<{
+  getSections(): {
     count: number
     sections: {
       index: number; orientation: string; columnCount: number
       pageWidth: number; pageHeight: number
     }[]
-  }> {
+  } {
     const doc = this.getDoc()
     const sections = doc.Sections as { Count: number; Item: (i: number) => Record<string, unknown> } | undefined
     if (!sections) return { count: 0, sections: [] }
@@ -189,7 +190,7 @@ export class WordDocument {
     return { count, sections: result }
   }
 
-  async exportToPdf(outputPath: string): Promise<void> {
+  exportToPdf(outputPath: string): void {
     const doc = this.getDoc()
     try {
       ;(doc.ExportAsFixedFormat as (path: string, format: number) => void)(outputPath, 17)

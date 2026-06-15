@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { WordSession } from "../../../src/word/session.js"
+import { ComError, FatalComError, TransientComError } from "../../../src/word/com-errors.js"
 
 function createMockWinax() {
   const mockApp: Record<string, unknown> = {
@@ -60,11 +61,11 @@ describe("WordSession", () => {
     expect(session.isAlive()).toBe(true)
   })
 
-  it("application getter throws when unhealthy", () => {
+  it("application getter throws FatalComError when unhealthy", () => {
     const { mockWinax } = createMockWinax()
     const session = new WordSession(() => mockWinax)
     session.markUnhealthy()
-    expect(() => session.application).toThrow("unhealthy")
+    expect(() => session.application).toThrow(FatalComError)
   })
 
   it("setActiveDoc stores and activeDoc returns it", () => {
@@ -89,18 +90,26 @@ describe("WordSession", () => {
     expect(() => session.quit()).not.toThrow()
   })
 
-  it("comCall throws on COM failure", () => {
+  it("comCall throws FatalComError on COM failure", () => {
     const { mockWinax } = createMockWinax()
     const session = new WordSession(() => mockWinax)
     session.start()
-    expect(() => session.comCall(() => { throw new Error("COM error") })).toThrow("COM error")
+    expect(() => session.comCall(() => { throw new Error("COM error") })).toThrow(FatalComError)
   })
 
-  it("healthCheck returns false when no Word process", () => {
+  it("comCall throws TransientComError for transient HRESULT", () => {
     const { mockWinax } = createMockWinax()
     const session = new WordSession(() => mockWinax)
     session.start()
-    expect(session.healthCheck()).toBe(false)
+    const err = { number: 0x80010005, message: "Call was rejected" }
+    expect(() => session.comCall(() => { throw err })).toThrow(TransientComError)
+  })
+
+  it("healthCheck returns true after start (optimistic alive)", () => {
+    const { mockWinax } = createMockWinax()
+    const session = new WordSession(() => mockWinax)
+    session.start()
+    expect(session.healthCheck()).toBe(true)
   })
 
   it("setOnLog stores handler", () => {

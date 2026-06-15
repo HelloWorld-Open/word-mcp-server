@@ -19,6 +19,7 @@ class Watchdog {
   private restarting = false
   private shutdown = false
   private stdinHandler: ((chunk: Buffer) => void) | null = null
+  private generation = 0
 
   start(): void {
     this.spawnChild()
@@ -28,7 +29,9 @@ class Watchdog {
 
   private spawnChild(): void {
     if (this.restarting) return
-    log(`Spawning child: ${CHILD_SCRIPT}`)
+    this.generation++
+    const myGeneration = this.generation
+    log(`Spawning child (generation ${myGeneration}): ${CHILD_SCRIPT}`)
 
     this.lastChildOutput = Date.now()
     this.child = spawn("node", [CHILD_SCRIPT], {
@@ -65,7 +68,8 @@ class Watchdog {
     // 子进程退出处理
     child.on("exit", (code, signal) => {
       log(`Child exited (code: ${code}, signal: ${signal})`)
-      if (!this.shutdown && !this.restarting) {
+      if (this.generation !== myGeneration) return
+      if (!this.shutdown) {
         log("Restarting child after unexpected exit...")
         this.spawnChild()
       }

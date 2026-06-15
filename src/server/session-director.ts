@@ -1,17 +1,13 @@
 import type { IWordSession } from "../word/session.js"
 import type { PositionMap } from "../word/position-map.js"
+import type { IStreamLock } from "../word/types.js"
+import type { WordApplicationManager } from "../word/application.js"
+import { ComError } from "../word/com-errors.js"
 import { WordMcpError, WordEngineTimeoutError } from "../security/errors.js"
 
 type Precondition = "DOC" | "NO_DOC"
 
 type SessionPath = "idle" | "streaming" | "editing"
-
-const ENGINE_ERROR_KEYWORDS = [
-  "automation", "rpc", "server", "call was rejected",
-  "0x800", "0x800706ba", "0x80010108",
-  "class not registered", "failed due to",
-  "object has been disconnected",
-]
 
 const READ_ONLY_TOOLS = new Set([
   "word_get_text", "word_get_paragraph", "word_get_structure", "word_get_info",
@@ -21,7 +17,7 @@ const READ_ONLY_TOOLS = new Set([
 ])
 
 const STREAM_BLOCKED_TOOLS = new Set([
-  "word_document", "word_open", "word_close", "word_quit",
+  "word_document", "word_open", "word_quit",
 ])
 
 const EDIT_BLOCKED_TOOLS = new Set([
@@ -30,15 +26,26 @@ const EDIT_BLOCKED_TOOLS = new Set([
 
 const STREAMING_WATCHDOG_MS = 600_000
 
-export class SessionDirector {
+export class SessionDirector implements IStreamLock {
   private _currentPath: SessionPath = "idle"
   private _streamingWatchdog: ReturnType<typeof setTimeout> | null = null
   private _session: IWordSession | null
   private _positionMap: PositionMap | null
+  private _appManager: WordApplicationManager | undefined
+  private _onLog: ((level: string, message: string) => void) | null = null
 
-  constructor(session: IWordSession | null, positionMap: PositionMap | null) {
+  constructor(session: IWordSession | null, positionMap: PositionMap | null, appManager?: WordApplicationManager) {
     this._session = session
     this._positionMap = positionMap
+    this._appManager = appManager
+  }
+
+  setOnLog(handler: (level: string, message: string) => void): void {
+    this._onLog = handler
+  }
+
+  private _log(level: string, message: string): void {
+    this._onLog?.(level, message)
   }
 
   get isStreamingActive(): boolean {
@@ -59,41 +66,51 @@ export class SessionDirector {
 
   acquireStreamLock(toolName: string): string | null {
     if (this._currentPath === "editing") {
+      this._log("warn", `Stream lock denied for ${toolName} — currently in edit mode`)
       return "[编辑模式] 当前处于文档编辑模式。\n>> Recovery: 请先使用 word_close() 关闭当前文档，再使用 word_stream_start 创建新文档。"
     }
     if (this._currentPath === "streaming") {
+      this._log("warn", `Stream lock denied for ${toolName} — already streaming`)
       return `[STREAMING] 当前处于流式会话中。\n>> Recovery: 请先用 word_stream_end 结束流式会话，再使用 ${toolName}。`
     }
     this._currentPath = "streaming"
     this._startWatchdog()
+    this._log("info", `Stream lock acquired by ${toolName} → streaming`)
     return null
   }
 
   releaseStreamLock(): void {
     this._currentPath = "idle"
     this._stopWatchdog()
+    this._log("info", "Stream lock released → idle")
   }
 
   enterEditMode(): void {
     if (this._currentPath === "idle") {
       this._currentPath = "editing"
+      this._log("info", "Edit mode entered → editing")
     }
   }
 
   exitEditMode(): void {
     if (this._currentPath === "editing") {
       this._currentPath = "idle"
+      this._log("info", "Edit mode exited → idle")
     }
   }
 
   refreshWatchdog(): void {
-    if (this._currentPath === "streaming") this._startWatchdog()
+    if (this._currentPath === "streaming") {
+      this._startWatchdog()
+      this._log("debug", "Streaming watchdog refreshed")
+    }
   }
 
   private _startWatchdog(): void {
     this._stopWatchdog()
     this._streamingWatchdog = setTimeout(() => {
       this._currentPath = "idle"
+      this._log("warn", "Streaming watchdog timed out → idle")
     }, STREAMING_WATCHDOG_MS)
   }
 
@@ -123,8 +140,7 @@ export class SessionDirector {
 
     const session = this._session
     if (session) {
-      if (session.isUnhealthy()) {
-      } else if (!session.isAlive()) {
+      if (session.isUnhealthy() || !session.isAlive()) {
         try { await session.recover() } catch { /* best effort */ }
       }
     }
@@ -152,7 +168,11 @@ export class SessionDirector {
         const doc = app.ActiveDocument as Record<string, unknown> | undefined
         if (doc) {
           session.setActiveDoc(doc)
-          try { session.setActiveDocPath(doc.FullName as string) } catch { /* ignore */ }
+          try {
+            const fullName = doc.FullName as string
+            session.setActiveDocPath(fullName)
+            this._appManager?.adoptDocument(fullName, doc)
+          } catch { /* ignore */ }
         }
       } catch { /* ignore */ }
       if (!session.activeDoc) {
@@ -188,17 +208,18 @@ export class SessionDirector {
     if (!SessionDirector.isReadOnlyTool(toolName)) this._positionMap?.markDirty()
   }
 
+  schedulePositionRefresh(): void {
+    this._positionMap?.scheduleRefresh()
+  }
+
   async recoverSession(): Promise<void> {
     await this._session?.recover()
   }
 
   static isEngineError(err: unknown): boolean {
     if (err instanceof WordEngineTimeoutError) return true
+    if (err instanceof ComError) return true
     if (err instanceof WordMcpError) return false
-    if (err instanceof Error) {
-      const msg = err.message.toLowerCase()
-      return ENGINE_ERROR_KEYWORDS.some(k => msg.includes(k))
-    }
     return false
   }
 

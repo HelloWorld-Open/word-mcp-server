@@ -129,6 +129,7 @@ export function registerDocumentTools(
     mcpCall(security, context, "word_close", async ({ saveChanges }) => {
       await appManager.closeDocument(saveChanges)
       context.director?.exitEditMode()
+      context.director?.releaseStreamLock()
       const saved = saveChanges ?? false
       return `Action: Document closed\nDetail: Changes saved: ${saved}\nNext: word_document({path:"C:\\file.docx"}) or word_stream_start({title:"New Doc"})`
     }),

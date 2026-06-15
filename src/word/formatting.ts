@@ -1,12 +1,24 @@
 import { WordBase } from "./word-base.js"
 import { WordMcpError } from "../security/errors.js"
 
+export type BorderSide = "top" | "bottom" | "left" | "right"
+
+export interface BorderOptions {
+  style: "none" | "single" | "dot" | "dash" | "double"
+  color?: string
+  size?: number
+  sides?: BorderSide[]
+}
+
 export interface StyleProfileFont {
   name?: string
   size?: number
   bold?: boolean
   italic?: boolean
   color?: string
+  underline?: "none" | "single" | "double" | "wavy"
+  highlight?: string
+  strikethrough?: boolean
 }
 
 export interface StyleProfilePara {
@@ -16,6 +28,9 @@ export interface StyleProfilePara {
   spaceAfter?: number
   lineSpacing?: number
   lineSpacingRule?: string
+  borders?: BorderOptions
+  keepWithNext?: boolean
+  pageBreakBefore?: boolean
 }
 
 export interface StyleProfile {
@@ -40,6 +55,12 @@ export class WordFormatting extends WordBase {
     auto: 0, black: 1, blue: 2, turquoise: 3, bright_green: 4, pink: 5,
     red: 6, yellow: 7, white: 8, dark_blue: 9, teal: 10, green: 11,
     violet: 12, dark_red: 13, dark_yellow: 14, gray_50: 15, gray_25: 16,
+  }
+  private static readonly BORDER_LINE_STYLE: Record<string, number> = {
+    none: 0, single: 1, dot: 3, dash: 7, double: 8,
+  }
+  private static readonly BORDER_SIDE_INDEX: Record<string, number> = {
+    top: -1, left: -2, bottom: -3, right: -4,
   }
 
   async setFont(params: Record<string, unknown>): Promise<void> {
@@ -109,6 +130,21 @@ export class WordFormatting extends WordBase {
       if (profile.font.bold != null) font.Bold = profile.font.bold
       if (profile.font.italic != null) font.Italic = profile.font.italic
       if (profile.font.color != null) font.ColorIndex = this.numOrEnum(profile.font.color, WordFormatting.COLOR_INDEX)
+      if (profile.font.underline != null) font.Underline = this.numOrEnum(profile.font.underline, WordFormatting.UNDERLINE)
+      if (profile.font.strikethrough != null) font.Strikethrough = profile.font.strikethrough ? 1 : 0
+      if (profile.font.highlight != null) {
+        const idx = WordFormatting.COLOR_INDEX[profile.font.highlight]
+        if (idx !== undefined) {
+          font.HighlightColorIndex = idx
+        } else if (profile.font.highlight.startsWith("#")) {
+          try {
+            const rgb = parseInt(profile.font.highlight.slice(1), 16)
+            const bgr = ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF)
+            const shading = font.Shading as Record<string, unknown>
+            shading.BackgroundPatternColor = bgr
+          } catch { /* ignore invalid hex */ }
+        }
+      }
     }
 
     if (profile.paragraph) {
@@ -119,11 +155,30 @@ export class WordFormatting extends WordBase {
       if (profile.paragraph.spaceAfter != null) pf.SpaceAfter = profile.paragraph.spaceAfter
       if (profile.paragraph.lineSpacing != null) pf.LineSpacing = profile.paragraph.lineSpacing
       if (profile.paragraph.lineSpacingRule != null) pf.LineSpacingRule = this.numOrEnum(profile.paragraph.lineSpacingRule, WordFormatting.LINE_SPACING_RULE)
+      if (profile.paragraph.keepWithNext != null) pf.KeepWithNext = profile.paragraph.keepWithNext
+      if (profile.paragraph.pageBreakBefore != null) pf.PageBreakBefore = profile.paragraph.pageBreakBefore
+      if (profile.paragraph.borders) {
+        const b = profile.paragraph.borders
+        const sides = b.sides ?? ["top", "bottom", "left", "right"]
+        const borders = pf.Borders as { Item: (i: number) => Record<string, unknown> }
+        for (const side of sides) {
+          const bi = WordFormatting.BORDER_SIDE_INDEX[side]
+          if (bi == null) continue
+          try {
+            const border = borders.Item(bi)
+            border.LineStyle = this.numOrEnum(b.style, WordFormatting.BORDER_LINE_STYLE)
+            if (b.color != null) border.ColorIndex = this.numOrEnum(b.color, WordFormatting.COLOR_INDEX)
+            if (b.size != null) border.LineWidth = b.size
+          } catch { /* ignore per-side border failures */ }
+        }
+      }
     }
   }
 
+  private static readonly CM_TO_POINTS = 28.3465
+
   private cmToPoints(cm: number): number {
-    return cm * 28.3465
+    return cm * WordFormatting.CM_TO_POINTS
   }
 
   async setPageSetup(params: Record<string, unknown>): Promise<void> {
@@ -191,6 +246,17 @@ export class WordFormatting extends WordBase {
   async setTrackChanges(enable: boolean): Promise<void> {
     const doc = this.requireDoc()
     doc.TrackRevisions = enable
+  }
+
+  private static readonly NORMAL_STYLES = ["Normal", "正文"]
+
+  resetParagraphStyle(): void {
+    try {
+      const sel = this.getSelection()
+      for (const name of WordFormatting.NORMAL_STYLES) {
+        try { sel.Style = name; return } catch { /* try next */ }
+      }
+    } catch { /* ignore */ }
   }
 
   async acceptAllChanges(): Promise<number> {
