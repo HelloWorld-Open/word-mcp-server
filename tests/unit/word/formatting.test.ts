@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from "vitest"
-import { WordFormatting, type StyleProfile } from "../../../src/word/formatting.js"
+import { WordFormatter, type StyleProfile } from "../../../src/word/word-formatter.js"
 import { createMockSession, createMockDoc, createMockSel } from "../test-helpers.js"
 
 function createFormatting() {
   const doc = createMockDoc()
   const sel = createMockSel()
   const session = createMockSession({}, doc, sel)
-  const fmt = new WordFormatting(session)
+  const fmt = new WordFormatter(session)
   return { fmt, doc, sel, session }
 }
 
@@ -32,7 +32,7 @@ function mockStyle(fontProps: Record<string, unknown> = {}, pfProps: Record<stri
   }
 }
 
-describe("WordFormatting.modifyStyle", () => {
+describe("WordFormatter.modifyStyle", () => {
   it("sets font underline via enum", async () => {
     const { fmt, doc } = createFormatting()
     const st = mockStyle()

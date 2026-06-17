@@ -1,8 +1,9 @@
 import type { IWordSession } from "./session.js"
-import type { DocumentInfo, HeadingEntry } from "./types.js"
+import { EXPORT_FORMAT_PDF, type DocumentInfo, type HeadingEntry } from "./types.js"
 import type { PositionMap } from "./position-map.js"
 import { WordMcpError } from "../security/errors.js"
 import { ContextSanitizer } from "./context-sanitizer.js"
+import type { IDocumentProxy } from "./com-proxy/types.js"
 
 export class WordDocument {
   constructor(
@@ -10,51 +11,52 @@ export class WordDocument {
     private positionMap: PositionMap,
   ) {}
 
-  private requireDoc(): Record<string, unknown> {
-    const doc = this.session.activeDoc ?? (this.session.application as Record<string, unknown>).ActiveDocument as Record<string, unknown> | undefined
+  private requireDoc(): IDocumentProxy {
+    const doc = this.session.getDocProxy()
     if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_stream_start to create a new document.")
     return doc
   }
 
-  private getDoc(): Record<string, unknown> {
+  private getDoc(): IDocumentProxy {
     return this.requireDoc()
   }
+
 
   getInfo(): DocumentInfo {
     const doc = this.getDoc()
     const stat = (n: number): number => {
-      try { return (doc.ComputeStatistics as (s: number) => number)(n) as number } catch { return 0 }
+      try { return doc.computeStatistics(n) as number } catch { return 0 }
     }
     const countOf = (key: string): number => {
       try {
-        const col = doc[key] as { Count?: number } | undefined
+        const col = doc.raw[key] as { Count?: number } | undefined
         return col?.Count ?? 0
       } catch { return 0 }
     }
     return {
-      name: doc.Name as string ?? "",
-      fullName: doc.FullName as string ?? "",
-      path: doc.Path as string ?? "",
+      name: doc.getName() ?? "",
+      fullName: doc.getFullName() ?? "",
+      path: doc.getPath() ?? "",
       wordCount: stat(0),
       paragraphCount: countOf("Paragraphs"),
       pageCount: stat(2),
       characterCount: stat(3),
       sectionCount: countOf("Sections"),
-      saved: (() => { try { return doc.Saved as boolean } catch { return false } })(),
+      saved: (() => { try { return doc.getSaved() } catch { return false } })(),
     }
   }
 
   getFullText(): string {
     const doc = this.getDoc()
-    const content = doc.Content as Record<string, unknown>
-    const text = (content.Text as string) ?? ""
+    const content = doc.getContent()
+    const text = content.getText() ?? ""
     return text
   }
 
   getParagraphText(index: number): string {
     const doc = this.getDoc()
-    const paras = doc.Paragraphs as unknown as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const total = paras.Count as number
+    const paras = doc.getParagraphs()
+    const total = paras.count
     if (index < 1 || index > total) {
       throw new WordMcpError(
         `Paragraph index ${index} out of range (1-${total})`,
@@ -63,14 +65,14 @@ export class WordDocument {
         "Use word_get_info() to check the paragraph count.",
       )
     }
-    const p = paras.Item(index)
+    const p = paras.item(index)
     return ContextSanitizer.stripBel((p.Range as Record<string, unknown>).Text as string ?? "")
   }
 
   getTableData(tableIndex: number): { tableCount: number; rows: number; columns: number; data: string[][] } {
     const doc = this.getDoc()
-    const tables = doc.Tables as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const tableCount = tables.Count as number
+    const tables = doc.getTables()
+    const tableCount = tables.count
     if (tableCount === 0) {
       throw new WordMcpError("No tables exist in the document", "NO_TABLES", false, "Use word_insert_table first.")
     }
@@ -82,7 +84,7 @@ export class WordDocument {
         `There are ${tableCount} table(s) in the document.`,
       )
     }
-    const table = tables.Item(tableIndex)
+    const table = tables.item(tableIndex)
     const rows = (table.Rows as { Count: number }).Count
     const columns = (table.Columns as { Count: number }).Count
     const data: string[][] = []
@@ -91,7 +93,7 @@ export class WordDocument {
       for (let c = 1; c <= columns; c++) {
         try {
           const cellText = ((table.Cell as (r: number, c: number) => Record<string, unknown>)(r, c).Range as Record<string, unknown>).Text as string ?? ""
-          rowData.push(cellText.replace(/[\r\x07]+$/, ""))
+          rowData.push(ContextSanitizer.stripBel(cellText))
         } catch {
           rowData.push("")
         }
@@ -103,11 +105,11 @@ export class WordDocument {
 
   getComments(): { author: string; text: string; index: number }[] {
     const doc = this.getDoc()
-    const comments = doc.Comments as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const count = comments.Count as number
+    const comments = doc.getComments()
+    const count = comments.count
     const result: { author: string; text: string; index: number }[] = []
     for (let i = 1; i <= count; i++) {
-      const c = comments.Item(i)
+      const c = comments.item(i)
       result.push({
         author: c.Author as string,
         text: ((c.Range as Record<string, unknown>).Text as string ?? "").replace(/[\r\x07]+$/, ""),
@@ -119,11 +121,11 @@ export class WordDocument {
 
   getBookmarks(): { name: string; index: number }[] {
     const doc = this.getDoc()
-    const bookmarks = doc.Bookmarks as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const count = bookmarks.Count as number
+    const bookmarks = doc.getBookmarks()
+    const count = bookmarks.count
     const result: { name: string; index: number }[] = []
     for (let i = 1; i <= count; i++) {
-      const b = bookmarks.Item(i)
+      const b = bookmarks.item(i)
       result.push({ name: b.Name as string, index: i })
     }
     return result
@@ -134,7 +136,7 @@ export class WordDocument {
     lists: { type: string; items: { level: number; text: string; prefix: string }[] }[]
   } {
     const doc = this.getDoc()
-    const lists = doc.Lists as { Count: number; Item: (i: number) => Record<string, unknown> }
+    const lists = doc.getLists() as { Count: number; Item: (i: number) => Record<string, unknown> }
     const listCount = lists.Count as number
     const result: { type: string; items: { level: number; text: string; prefix: string }[] }[] = []
     for (let i = 1; i <= listCount; i++) {
@@ -168,17 +170,17 @@ export class WordDocument {
     }[]
   } {
     const doc = this.getDoc()
-    const sections = doc.Sections as { Count: number; Item: (i: number) => Record<string, unknown> } | undefined
+    const sections = doc.getSections()
     if (!sections) return { count: 0, sections: [] }
-    const count = sections.Count as number
+    const count = sections.count
     const result: {
       index: number; orientation: string; columnCount: number
       pageWidth: number; pageHeight: number
     }[] = []
     for (let i = 1; i <= count; i++) {
-      const s = sections.Item(i)
-      const ps = s.PageSetup as Record<string, unknown> | undefined
-      const cols = s.Columns as { Count: number } | undefined
+      const s = sections.item(i)
+      const ps = s.getPageSetup()
+      const cols = s.raw.Columns as { Count: number } | undefined
       result.push({
         index: i,
         orientation: ps && (ps.Orientation as number) === 1 ? "landscape" : "portrait",
@@ -193,7 +195,7 @@ export class WordDocument {
   exportToPdf(outputPath: string): void {
     const doc = this.getDoc()
     try {
-      ;(doc.ExportAsFixedFormat as (path: string, format: number) => void)(outputPath, 17)
+      doc.exportAsFixedFormat(outputPath, EXPORT_FORMAT_PDF)
     } catch (e) {
       throw new WordMcpError(
         `Failed to export PDF: ${e instanceof Error ? e.message : String(e)}`,
@@ -208,7 +210,7 @@ export class WordDocument {
     await this.positionMap.ensureFresh()
     const headings = this.positionMap.getHeadings()
     const doc = this.getDoc()
-    const totalParagraphs = (doc.Paragraphs as { Count: number }).Count as number
+    const totalParagraphs = doc.getParagraphs().count
     return { headings, totalParagraphs }
   }
 }

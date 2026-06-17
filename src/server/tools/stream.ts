@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SecurityManager } from "../../security/policy.js"
 import type { ServerContext } from "../server-context.js"
 import type { StreamingMarkdownWriter } from "../../word/word-stream-writer.js"
-import { mcpCall } from "./helper.js"
+import { createRegTool, ColorSchema } from "./shared.js"
 
 export function registerStreamTools(
   server: McpServer,
@@ -11,10 +11,10 @@ export function registerStreamTools(
   streamWriter: StreamingMarkdownWriter,
   security: SecurityManager,
 ): void {
-  server.registerTool(
-    "word_stream_start",
+  const regTool = createRegTool(server, security, context)
+  regTool("word_stream_start",
     {
-      description: "启动一个流式文档会话，创建新文档并准备逐块写入。自动关闭当前活动文档。支持空白文档和模板(.dotx)创建。支持通过 baseStyleProfile 预定义内置样式（Normal、Heading 1 等），markdown 写入时自动继承样式格式，零额外 COM 开销。",
+      description: "启动一个流式文档会话，创建新文档。Start a streaming session to create a new document with styles, page setup, and optional template. WHEN: creating a new document (recommended approach for all new docs). NOT: want to edit an existing document? use word_document.",
       inputSchema: {
         title: z.string().max(255).optional().describe("文档标题"),
         author: z.string().max(255).optional().describe("文档作者"),
@@ -32,7 +32,7 @@ export function registerStreamTools(
               size: z.number().min(1).max(1638).optional().describe("字号 (pt)"),
               bold: z.boolean().optional().describe("加粗"),
               italic: z.boolean().optional().describe("斜体"),
-              color: z.enum(["auto", "black", "blue", "turquoise", "bright_green", "pink", "red", "yellow", "white", "dark_blue", "teal", "green", "violet", "dark_red", "dark_yellow", "gray_50", "gray_25"]).optional().describe("字体颜色"),
+              color: ColorSchema.optional().describe("字体颜色"),
               underline: z.enum(["none", "single", "double", "wavy"]).optional().describe("下划线"),
               strikethrough: z.boolean().optional().describe("删除线"),
               highlight: z.string().max(20).optional().describe("高亮色 (17 色枚举名 或 #RRGGBB hex)"),
@@ -48,7 +48,7 @@ export function registerStreamTools(
               pageBreakBefore: z.boolean().optional().describe("段前分页"),
               borders: z.object({
                 style: z.enum(["none", "single", "dot", "dash", "double"]).describe("边框线型"),
-                color: z.enum(["auto", "black", "blue", "turquoise", "bright_green", "pink", "red", "yellow", "white", "dark_blue", "teal", "green", "violet", "dark_red", "dark_yellow", "gray_50", "gray_25"]).optional().describe("边框颜色"),
+                color: ColorSchema.optional().describe("边框颜色"),
                 size: z.number().min(1).max(48).optional().describe("线宽 (1/4pt)"),
                 sides: z.array(z.enum(["top", "bottom", "left", "right"])).optional().describe("应用到的边，默认四边"),
               }).optional(),
@@ -57,47 +57,47 @@ export function registerStreamTools(
         ).optional().describe("内置样式配置，如 Normal、Heading 1 等。在文档创建时修改样式定义，所有应用该样式的内容自动继承格式"),
       },
     },
-    mcpCall(security, context, "word_stream_start", async (args) => {
+    async (args) => {
       const safeArgs = args.templatePath
         ? { ...args, templatePath: security.pathSanitizer.resolveAndValidate(args.templatePath) }
         : args
       return await streamWriter.start(safeArgs)
-    }, { preconditions: [] }),
+    },
+    { preconditions: [] },
   )
 
-  server.registerTool(
-    "word_stream_block",
+  regTool("word_stream_block",
     {
-      description: "写入一个或多个 markdown 内容块到当前流式文档中，内容即时在 Word 窗口中呈现。必须在 word_stream_start 之后调用。支持标题、段落、列表、表格、代码块、引用等所有 markdown 语法。",
+      description: "写入 markdown 内容块。Write a markdown content block into the current streaming session — content appears in Word in real time. WHEN: after word_stream_start, to write document content in chapters. NOT: no active streaming session? call word_stream_start first.",
       inputSchema: {
         text: z.string().min(1).max(100000).describe("Markdown 内容（单个或多个块，建议按自然章节分批发送）"),
       },
     },
-    mcpCall(security, context, "word_stream_block", async (args) => {
+    async (args) => {
       const result = await streamWriter.writeBlock(args.text)
-      return `已写入 ${result.chars} 字符（${result.blockType}），累计 ${result.blockIndex} 块`
-    }),
+      return `Written ${result.chars} chars (${result.blockType}), total ${result.blockIndex} blocks`
+    },
+    { timeoutMs: 0 },
   )
 
-  server.registerTool(
-    "word_stream_end",
+  regTool("word_stream_end",
     {
-      description: "结束流式文档会话，保存文档并可选导出为 PDF。保存后流式会话终止。",
+      description: "结束流式文档会话。End the streaming session, save the document, and optionally export to PDF. WHEN: finished writing all content with word_stream_block. NOT: want to write more content? use word_stream_block instead.",
       inputSchema: {
         save: z.boolean().optional().describe("是否保存文档（默认 true）"),
         exportPath: z.string().max(4096).optional().describe("可选 PDF 导出路径"),
       },
     },
-    mcpCall(security, context, "word_stream_end", async (args) => {
+    async (args) => {
       const safePath = args.exportPath
         ? security.pathSanitizer.validateForWrite(args.exportPath)
         : undefined
       const result = await streamWriter.end({ save: args.save, exportPath: safePath })
-      const lines: string[] = [`流式会话已结束`]
-      lines.push(`累计写入 ${result.blockCount} 块，${result.charCount} 字符，耗时 ${result.elapsed}ms`)
-      if (result.savedPath) lines.push(`保存至: ${result.savedPath}`)
-      if (result.pdfPath) lines.push(`PDF 导出至: ${result.pdfPath}`)
+      const lines: string[] = [`Stream session ended`]
+      lines.push(`Total ${result.blockCount} blocks, ${result.charCount} chars, ${result.elapsed}ms`)
+      if (result.savedPath) lines.push(`Saved to: ${result.savedPath}`)
+      if (result.pdfPath) lines.push(`PDF exported to: ${result.pdfPath}`)
       return lines.join("\n")
-    }),
+    },
   )
 }

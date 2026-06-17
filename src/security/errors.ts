@@ -22,6 +22,18 @@ export class WordEngineTimeoutError extends WordMcpError {
   }
 }
 
+export class ServerNotReadyError extends WordMcpError {
+  constructor() {
+    super(
+      "Server components not fully initialized. The session director, position map, or Word session is null.",
+      "SERVER_NOT_READY",
+      false,
+      "Please restart the MCP server. If the problem persists, ensure Microsoft Word is installed and accessible.",
+    )
+    this.name = "ServerNotReadyError"
+  }
+}
+
 export class PathSecurityError extends WordMcpError {
   constructor(message: string) {
     super(message, "PATH_SECURITY", false)

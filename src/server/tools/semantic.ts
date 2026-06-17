@@ -1,12 +1,12 @@
 import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { WordTextEditor } from "../../word/word-text-editor.js"
-import { WordTableEditor } from "../../word/word-table-editor.js"
-import { WordMarkdown } from "../../word/word-markdown.js"
+import { WordCursor } from "../../word/word-cursor.js"
+import { WordFormatter } from "../../word/word-formatter.js"
+import { WordContentWriter } from "../../word/word-content-writer.js"
 import { PositionMap, type Locator, type ResolvedPosition } from "../../word/position-map.js"
 import { SecurityManager } from "../../security/policy.js"
 import type { ServerContext } from "../server-context.js"
-import { mcpCall } from "./helper.js"
+import { createRegTool, locatorFields } from "./shared.js"
 
 export function locatorFromArgs(args: Record<string, unknown>): Locator {
   const by = (args.by as string) ?? "heading"
@@ -45,33 +45,22 @@ function formatPosition(pos: ResolvedPosition): string {
   return parts.join(" | ")
 }
 
-const locatorFields = {
-  by: z.enum(["heading", "paragraph", "table", "bookmark", "cursor"]).optional().describe("Target type (default: heading)"),
-  match: z.string().max(5000).optional().describe("Text to match (for heading/paragraph)"),
-  matchMode: z.enum(["exact", "contains", "startsWith", "regex"]).optional().describe("Matching mode (default: exact)"),
-  occurrence: z.number().int().min(1).max(1000).optional().describe("Which occurrence to target (1-based, default: 1)"),
-  offsetDirection: z.enum(["before", "after"]).optional().describe("Offset direction from the matched element"),
-  offsetCount: z.number().int().min(1).max(1000).optional().describe("Number of paragraphs to offset (default: 1)"),
-  name: z.string().min(1).max(255).optional().describe("Bookmark name (required when by='bookmark')"),
-  level: z.number().int().min(1).max(9).optional().describe("Heading level filter (1-9). Applied BEFORE match and occurrence, narrowing to same-level headings only."),
-} as const
-
 export function registerSemanticTools(
   server: McpServer,
   context: ServerContext,
-  textEditor: WordTextEditor,
-  tableEditor: WordTableEditor,
-  markdown: WordMarkdown,
+  cursor: WordCursor,
+  formatter: WordFormatter,
+  contentWriter: WordContentWriter,
   positionMap: PositionMap,
   security: SecurityManager,
 ): void {
-  server.registerTool(
-    "word_locate",
+  const regTool = createRegTool(server, security, context)
+  regTool("word_locate",
     {
       description: "Resolve a semantic location in the document and return position info. WHEN: need to find where a heading/paragraph/table/bookmark is before editing. NOT: want to move cursor? use word_select_at instead.",
       inputSchema: locatorFields,
     },
-    mcpCall(security, context, "word_locate", async (args) => {
+    async (args) => {
       const locator = locatorFromArgs(args)
       const pos = await positionMap.resolve(locator)
       if (!pos.found) {
@@ -87,28 +76,27 @@ export function registerSemanticTools(
         lines.push(`Next: word_select_at(${JSON.stringify(args)}) to move cursor`)
       }
       return lines.join("\n")
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_select_at",
+  regTool("word_select_at",
     {
       description: "Move cursor to a semantic location (heading/paragraph/table/bookmark). WHEN: need to navigate precisely without calculating paragraph numbers. NOT: just want to check location? use word_locate.",
       inputSchema: locatorFields,
     },
-    mcpCall(security, context, "word_select_at", async (args) => {
+    async (args) => {
       const locator = locatorFromArgs(args)
-      const pos = await positionMap.resolve(locator)
+      const skipFresh = locator.by === "bookmark"
+      const pos = await positionMap.resolve(locator, skipFresh)
       if (!pos.found) {
         return `Action: Select failed\nDetail: ${pos.error}`
       }
-      await textEditor.goToParagraph(pos.paragraphIndex)
+      await cursor.goToParagraph(pos.paragraphIndex)
       return `Action: Cursor moved\nDetail: ${formatPosition(pos)}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_insert_at",
+  regTool("word_insert_at",
     {
       description: "Insert Markdown content at a semantic location. Supports headings, bold, italic, lists, tables, code blocks, blockquotes. WHEN: need to write structured content at a specific heading/paragraph. NOT: creating a new document? use word_stream_start instead.",
       inputSchema: {
@@ -116,9 +104,9 @@ export function registerSemanticTools(
         text: z.string().max(100000).describe("Markdown content to insert"),
       },
     },
-    mcpCall(security, context, "word_insert_at", async (args) => {
+    async (args) => {
       if (args.by === "cursor") {
-        const result = await markdown.insertAtCursor(args.text as string)
+        const result = await contentWriter.insertAtCursor(args.text as string)
         const preview = (args.text as string).slice(0, 80) + ((args.text as string).length > 80 ? "..." : "")
         return `Action: Markdown inserted at cursor\nDetail: "${preview}" (${result.blocks} blocks, ${result.chars} chars)`
       }
@@ -127,15 +115,14 @@ export function registerSemanticTools(
       if (!pos.found) {
         return `Action: Insert failed\nDetail: ${pos.error}`
       }
-      await textEditor.goToParagraph(pos.paragraphIndex)
-      const result = await markdown.insertAtCursor(args.text as string)
+      await cursor.goToParagraph(pos.paragraphIndex)
+      const result = await contentWriter.insertAtCursor(args.text as string)
       const preview = (args.text as string).slice(0, 80) + ((args.text as string).length > 80 ? "..." : "")
       return `Action: Markdown inserted\nDetail: "${preview}" (${result.blocks} blocks, ${result.chars} chars) at ${formatPosition(pos)}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_edit_cell_at",
+  regTool("word_edit_cell_at",
     {
       description: "Edit a table cell by first locating the table semantically. WHEN: need to edit a specific cell but don't know the table index. NOT: already know the table index? use word_edit_cell.",
       inputSchema: {
@@ -145,14 +132,14 @@ export function registerSemanticTools(
         text: z.string().max(100000).describe("New cell text"),
       },
     },
-    mcpCall(security, context, "word_edit_cell_at", async (args) => {
+    async (args) => {
       const locator = locatorFromArgs(args)
       const pos = await positionMap.resolve(locator)
       if (!pos.found) {
         return `Action: Edit cell failed\nDetail: ${pos.error}`
       }
       const tableIdx = pos.tableIndex ?? 1
-      await tableEditor.editTableCell({
+      await formatter.editTableCell({
         tableIndex: tableIdx,
         row: args.row as number,
         column: args.column as number,
@@ -160,6 +147,6 @@ export function registerSemanticTools(
       })
       const preview = (args.text as string).slice(0, 50) + ((args.text as string).length > 50 ? "..." : "")
       return `Action: Cell (${args.row},${args.column}) in table at ${formatPosition(pos)} updated\nDetail: "${preview}"`
-    }),
+    },
   )
 }

@@ -2,19 +2,11 @@ import type { IWordSession } from "../word/session.js"
 import type { PositionMap } from "../word/position-map.js"
 import type { IStreamLock } from "../word/types.js"
 import type { WordApplicationManager } from "../word/application.js"
-import { ComError } from "../word/com-errors.js"
-import { WordMcpError, WordEngineTimeoutError } from "../security/errors.js"
+import { CircuitBreaker } from "../word/circuit-breaker.js"
+import { SessionPathMachine, type SessionPath } from "./session-path-machine.js"
+import { isReadOnlyTool } from "./tools/shared.js"
 
-type Precondition = "DOC" | "NO_DOC"
-
-type SessionPath = "idle" | "streaming" | "editing"
-
-const READ_ONLY_TOOLS = new Set([
-  "word_get_text", "word_get_paragraph", "word_get_structure", "word_get_info",
-  "word_get_status", "word_get_table_data", "word_get_comments", "word_get_bookmarks",
-  "word_get_lists", "word_get_sections", "word_get_cursor_info", "word_locate",
-  "word_list_styles",
-])
+export type Precondition = "DOC" | "NO_DOC"
 
 const STREAM_BLOCKED_TOOLS = new Set([
   "word_document", "word_open", "word_quit",
@@ -24,24 +16,29 @@ const EDIT_BLOCKED_TOOLS = new Set([
   "word_stream_start",
 ])
 
-const STREAMING_WATCHDOG_MS = 600_000
+const WATCHDOG_INTERVAL = 5000
+const HUNG_THRESHOLD = 30000
 
 export class SessionDirector implements IStreamLock {
-  private _currentPath: SessionPath = "idle"
-  private _streamingWatchdog: ReturnType<typeof setTimeout> | null = null
+  private _pathMachine: SessionPathMachine
   private _session: IWordSession | null
   private _positionMap: PositionMap | null
   private _appManager: WordApplicationManager | undefined
   private _onLog: ((level: string, message: string) => void) | null = null
+  private _circuitBreaker: CircuitBreaker
+  private _watchdogTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(session: IWordSession | null, positionMap: PositionMap | null, appManager?: WordApplicationManager) {
+    this._pathMachine = new SessionPathMachine()
     this._session = session
     this._positionMap = positionMap
     this._appManager = appManager
+    this._circuitBreaker = new CircuitBreaker()
   }
 
   setOnLog(handler: (level: string, message: string) => void): void {
     this._onLog = handler
+    this._pathMachine.setOnLog(handler)
   }
 
   private _log(level: string, message: string): void {
@@ -49,15 +46,58 @@ export class SessionDirector implements IStreamLock {
   }
 
   get isStreamingActive(): boolean {
-    return this._currentPath === "streaming"
+    return this._pathMachine.isStreamingActive
   }
 
   get currentPath(): SessionPath {
-    return this._currentPath
+    return this._pathMachine.currentPath
   }
 
   get session(): IWordSession | null {
     return this._session
+  }
+
+  get circuitBreaker(): CircuitBreaker {
+    return this._circuitBreaker
+  }
+
+  startWatchdog(): void {
+    if (this._watchdogTimer) return
+    this._watchdogTimer = setInterval(() => this._watchdogTick(), WATCHDOG_INTERVAL)
+  }
+
+  stopWatchdog(): void {
+    if (this._watchdogTimer) {
+      clearInterval(this._watchdogTimer)
+      this._watchdogTimer = null
+    }
+  }
+
+  private _watchdogTick(): void {
+    const session = this._session
+    if (!session || !session.isAlive()) return
+
+    if (session.isUnhealthy()) {
+      this._log("warn", "Watchdog: session unhealthy, attempting recovery")
+      session.recover().then(() => {
+        this._circuitBreaker.forceReset()
+        this._log("info", "Watchdog: session recovered successfully")
+      }).catch((err) => {
+        this._log("error", `Watchdog: recovery failed: ${err}`)
+      })
+      return
+    }
+
+    const lastCallStart = session.getLastCallStart()
+    if (lastCallStart > 0 && Date.now() - lastCallStart > HUNG_THRESHOLD) {
+      this._log("warn", `Watchdog: COM call hung for >${HUNG_THRESHOLD}ms, killing Word`)
+      session.recover().then(() => {
+        this._circuitBreaker.forceReset()
+        this._log("info", "Watchdog: Word recovered after hung call")
+      }).catch((err) => {
+        this._log("error", `Watchdog: recovery failed: ${err}`)
+      })
+    }
   }
 
   get positionMap(): PositionMap | null {
@@ -65,83 +105,64 @@ export class SessionDirector implements IStreamLock {
   }
 
   acquireStreamLock(toolName: string): string | null {
-    if (this._currentPath === "editing") {
-      this._log("warn", `Stream lock denied for ${toolName} — currently in edit mode`)
-      return "[编辑模式] 当前处于文档编辑模式。\n>> Recovery: 请先使用 word_close() 关闭当前文档，再使用 word_stream_start 创建新文档。"
-    }
-    if (this._currentPath === "streaming") {
-      this._log("warn", `Stream lock denied for ${toolName} — already streaming`)
-      return `[STREAMING] 当前处于流式会话中。\n>> Recovery: 请先用 word_stream_end 结束流式会话，再使用 ${toolName}。`
-    }
-    this._currentPath = "streaming"
-    this._startWatchdog()
-    this._log("info", `Stream lock acquired by ${toolName} → streaming`)
-    return null
+    return this._pathMachine.acquireStreamLock(toolName)
   }
 
   releaseStreamLock(): void {
-    this._currentPath = "idle"
-    this._stopWatchdog()
-    this._log("info", "Stream lock released → idle")
+    this._pathMachine.releaseStreamLock()
   }
 
   enterEditMode(): void {
-    if (this._currentPath === "idle") {
-      this._currentPath = "editing"
-      this._log("info", "Edit mode entered → editing")
-    }
+    this._pathMachine.enterEditMode()
   }
 
   exitEditMode(): void {
-    if (this._currentPath === "editing") {
-      this._currentPath = "idle"
-      this._log("info", "Edit mode exited → idle")
-    }
+    this._pathMachine.exitEditMode()
   }
 
   refreshWatchdog(): void {
-    if (this._currentPath === "streaming") {
-      this._startWatchdog()
-      this._log("debug", "Streaming watchdog refreshed")
-    }
-  }
-
-  private _startWatchdog(): void {
-    this._stopWatchdog()
-    this._streamingWatchdog = setTimeout(() => {
-      this._currentPath = "idle"
-      this._log("warn", "Streaming watchdog timed out → idle")
-    }, STREAMING_WATCHDOG_MS)
-  }
-
-  private _stopWatchdog(): void {
-    if (this._streamingWatchdog !== null) {
-      clearTimeout(this._streamingWatchdog)
-      this._streamingWatchdog = null
-    }
+    this._pathMachine.refreshWatchdog()
   }
 
   async precheck(
     toolName: string,
     precondition?: Precondition | Precondition[],
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    if (this._currentPath === "streaming" && STREAM_BLOCKED_TOOLS.has(toolName)) {
+    if (this._pathMachine.currentPath === "streaming" && STREAM_BLOCKED_TOOLS.has(toolName)) {
       return {
         ok: false,
-        error: `[STREAMING] 当前处于流式会话中。\n>> Recovery: 请先用 word_stream_end 结束流式会话，再使用 ${toolName}。`,
+        error: `[STREAMING] Currently in a stream session.\n>> Recovery: End the stream session with word_stream_end first, then use ${toolName}.`,
       }
     }
-    if (this._currentPath === "editing" && EDIT_BLOCKED_TOOLS.has(toolName)) {
+    if (this._pathMachine.currentPath === "editing" && EDIT_BLOCKED_TOOLS.has(toolName)) {
       return {
         ok: false,
-        error: "[编辑模式] 当前处于文档编辑模式。\n>> Recovery: 请先使用 word_close() 关闭当前文档，再使用 word_stream_start 创建新文档。",
+        error: "[EDIT_MODE] Currently in document editing mode.\n>> Recovery: Close the current document with word_close() first, then use word_stream_start to create a new document.",
       }
     }
 
     const session = this._session
     if (session) {
+      if (session.isBusy() && session.isAlive() && !session.isUnhealthy()) {
+        this._log("info", "Clearing stale busy flag")
+        session.setBusy(false)
+      }
       if (session.isUnhealthy() || !session.isAlive()) {
-        try { await session.recover() } catch { /* best effort */ }
+        try {
+          await session.recover()
+          this._circuitBreaker.forceReset()
+        } catch (e) { console.warn("[SessionDirector] precheck recovery failed:", e) }
+      }
+    }
+
+    try {
+      this._circuitBreaker.check()
+    } catch (err) {
+      if (session?.isAlive() && !session.isUnhealthy()) {
+        this._circuitBreaker.forceReset()
+      } else {
+        const breakerErr = err as Error
+        return { ok: false, error: breakerErr.message + (this.captureStatusSuffix() ?? "") }
       }
     }
 
@@ -164,23 +185,22 @@ export class SessionDirector implements IStreamLock {
     }
     if (p === "DOC" && !session.activeDoc) {
       try {
-        const app = session.application as Record<string, unknown>
-        const doc = app.ActiveDocument as Record<string, unknown> | undefined
-        if (doc) {
-          session.setActiveDoc(doc)
-          try {
-            const fullName = doc.FullName as string
-            session.setActiveDocPath(fullName)
-            this._appManager?.adoptDocument(fullName, doc)
-          } catch { /* ignore */ }
+        if (session.tryAdoptActiveDoc()) {
+          const doc = session.activeDoc
+          const fullName = session.activeDocPath
+          if (doc && fullName) {
+            try {
+              this._appManager?.adoptDocument(fullName, doc)
+            } catch { console.warn("[SessionDirector] adoptDocument failed during precheck") }
+          }
         }
-      } catch { /* ignore */ }
+      } catch { console.warn("[SessionDirector] activeDoc resolution failed during precheck") }
       if (!session.activeDoc) {
-        return "[NO_DOCUMENT] 当前没有打开的文档。\n>> Recovery: 请先使用 word_stream_start({title:'...'}) 创建新文档，或 word_document({path:'...'}) 打开已有文档。"
+        return "[NO_DOCUMENT] No document is currently open.\n>> Recovery: Use word_stream_start({title:'...'}) to create a new document, or word_document({path:'...'}) to open an existing one."
       }
     }
     if (p === "NO_DOC" && session.activeDoc) {
-      return "[DOC_ACTIVE] 当前已有文档打开。\n>> Recovery: 请先使用 word_close() 关闭当前文档，再创建新文档。"
+      return "[DOC_ACTIVE] A document is currently open.\n>> Recovery: Close the current document with word_close() first, then create a new document."
     }
     return null
   }
@@ -189,7 +209,7 @@ export class SessionDirector implements IStreamLock {
     const session = this._session
     if (!session) return ""
     try {
-      const pathLabel = this._currentPath === "streaming" ? " [流式会话活跃]" : this._currentPath === "editing" ? " [编辑模式]" : ""
+      const pathLabel = this._pathMachine.currentPath === "streaming" ? " [stream active]" : this._pathMachine.currentPath === "editing" ? " [edit mode]" : ""
       if (!session.activeDoc) return `\n---\ndoc: none${pathLabel}`
       const path = session.activeDocPath
       if (!path) return `\n---\ndoc: untitled${pathLabel}`
@@ -200,12 +220,26 @@ export class SessionDirector implements IStreamLock {
     }
   }
 
+  captureContextSuffix(): string {
+    const pm = this._positionMap
+    if (!pm) return ""
+    try {
+      const v = pm.docVersion
+      const p = pm.cachedParaCount
+      const h = pm.cachedHeadingCount
+      const t = pm.cachedTableCount
+      return `\n---\nstruct: v=${v} p=${p} h=${h} t=${t}`
+    } catch {
+      return ""
+    }
+  }
+
   markHealthy(): void {
     this._session?.markHealthy()
   }
 
   markDirtyIfNeeded(toolName: string): void {
-    if (!SessionDirector.isReadOnlyTool(toolName)) this._positionMap?.markDirty()
+    if (!isReadOnlyTool(toolName)) this._positionMap?.markDirty()
   }
 
   schedulePositionRefresh(): void {
@@ -214,16 +248,6 @@ export class SessionDirector implements IStreamLock {
 
   async recoverSession(): Promise<void> {
     await this._session?.recover()
-  }
-
-  static isEngineError(err: unknown): boolean {
-    if (err instanceof WordEngineTimeoutError) return true
-    if (err instanceof ComError) return true
-    if (err instanceof WordMcpError) return false
-    return false
-  }
-
-  static isReadOnlyTool(toolName: string): boolean {
-    return READ_ONLY_TOOLS.has(toolName)
+    this._circuitBreaker.forceReset()
   }
 }

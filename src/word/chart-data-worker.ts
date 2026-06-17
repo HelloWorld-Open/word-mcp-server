@@ -23,6 +23,7 @@ function ensureWord(): Record<string, unknown> {
       const _ = (word.Version as string)
       return word
     } catch {
+      try { ;(word.Quit as () => void)() } catch { /* already gone */ }
       word = null
     }
   }
@@ -84,7 +85,7 @@ process.on("message", (msg: unknown) => {
   if (task.params == null) {
     if (task.id === -1) {
       if (word) {
-        try { ;(word.Quit as () => void)() } catch { }
+        try { ;(word.Quit as () => void)() } catch (e) { console.warn("[chart-data-worker] Word.Quit failed on shutdown:", e) }
         word = null
       }
       process.exit(0)
@@ -100,6 +101,19 @@ process.on("message", (msg: unknown) => {
 })
 
 process.on("uncaughtException", (err) => {
-  try { process.send!({ id: -2, error: err.message }) } catch { }
+  try { process.send!({ id: -2, error: err.message }) } catch { /* parent may be gone */ }
+  if (word) {
+    try { ;(word.Quit as () => void)() } catch { /* Word may be gone */ }
+    word = null
+  }
   process.exit(1)
+})
+
+/* Best-effort: quit Word on any exit path (process.exit / normal exit).
+ * Not called on SIGKILL where zombie is unavoidable. */
+process.on("exit", () => {
+  if (word) {
+    try { ;(word.Quit as () => void)() } catch { /* ignore */ }
+    word = null
+  }
 })

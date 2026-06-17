@@ -39,3 +39,5 @@
 **ProcessMonitor** — 子进程健康看门狗。监控 `chart-data-worker` 等派生进程的生命周期，管理空闲超时和异常终止后的资源清理。在 `word/` 层提供进程级保障。
 
 **StreamingMarkdownWriter** — 流式文档写入引擎（`word/word-stream-writer.ts`）。支持在单个 COM 会话中分块写入 Markdown 内容，内容在 Word 窗口中即时呈现。配合 `word_stream_start/block/end` 工具链，实现零样板代码的文档生成。自动管理样式继承、光标定位和批处理刷新。支持 `baseStyleProfile` 在文档创建时预配置样式定义（字体、段落），markdown 写入时自动继承。
+
+**COM Proxy** — 类型化的 COM 对象包装层（`word/com-proxy/`）。`DocumentProxy` / `SelectionProxy` / `RangeProxy` 分别封装最常用的三个 COM 对象，消除全库 `Record<string, unknown>` 类型不安全。在 Session 层通过 `getDocProxy()` / `getSelectionProxy()` / `wrapRange()` 懒加载工厂构造。子对象（Find、Font、Shading 等）保持 Record 逃生口，待后续细分。

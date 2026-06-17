@@ -21,7 +21,7 @@
 
 ## What it is
 
-Let your AI agent directly control Microsoft Word. 108 tools covering the full workflow — create, edit, format, tables, charts, images, bookmarks, headers, footers, comments. Word runs as a visible window. Every change appears instantly. Ctrl+Z works end-to-end.
+Let your AI agent directly control Microsoft Word. 80 tools covering the full workflow — create, edit, format, tables, charts, images, bookmarks, headers, footers, comments. Word runs as a visible window. Every change appears instantly. Ctrl+Z works end-to-end.
 
 > Requires a valid Microsoft Word license. Does not include, crack, or distribute Office software.
 
@@ -46,9 +46,9 @@ Let your AI agent directly control Microsoft Word. 108 tools covering the full w
 
 ## Why you need it
 
-- **108 tools** — text, tables, charts, images, headers, footers, comments, bookmarks — precise control over every detail
+- **80 tools** — text, tables, charts, images, headers, footers, comments, bookmarks — precise control over every detail
 - **Streaming Markdown** — `start → block → end` in 3 steps. Instant preview. Auto style inheritance.
-- **Manager API** — one call for complex workflows (header → page numbers → table → watermark). Agent doesn't juggle cursor position.
+- **Auto cursor management** — header/footer/table/marker operations reset cursor automatically. No manual position juggling needed.
 - **Ctrl+Z friendly** — COM API native operations. Agent messes up? Just undo.
 - **Security built-in** — path sanitization, macros disabled, Zod validation, rate limiting, audit logging
 
@@ -81,7 +81,7 @@ Then tell your agent: *"Write a weekly report in Word."*
 
 ### 📖 More
 
-- [TOOLS.md](./TOOLS.md) — 108-tool quick reference
+- [TOOLS.md](./TOOLS.md) — 80-tool quick reference
 - [CONTEXT.md](./CONTEXT.md) — architecture & design
 - [.env.example](./.env.example) — configuration
 - [MIT License](./LICENSE)

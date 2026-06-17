@@ -1,5 +1,7 @@
 import { vi } from "vitest"
 import type { IWordSession } from "../../src/word/session.js"
+import type { IDocumentProxy, ISelectionProxy, IRangeProxy } from "../../src/word/com-proxy/types.js"
+import { createMockDocProxy, createMockSelProxy, createMockRangeProxy } from "../../src/word/com-proxy/com-proxy.mock.js"
 
 export function createMockDoc(): Record<string, unknown> {
   return {
@@ -98,11 +100,16 @@ export function createMockSession(
     ScreenRefresh: vi.fn(),
   } as Record<string, unknown>
 
+  let docProxy: IDocumentProxy = createMockDocProxy(doc)
+  let selProxy: ISelectionProxy = createMockSelProxy(sel)
+
   const base: IWordSession = {
     application: app,
     activeDoc: doc,
     activeDocPath: null,
-    setActiveDoc: vi.fn(),
+    setActiveDoc: vi.fn((d) => {
+      docProxy = createMockDocProxy(d ?? {})
+    }),
     setActiveDocPath: vi.fn(),
     ensureAlive: vi.fn(),
     isAlive: () => true,
@@ -117,6 +124,11 @@ export function createMockSession(
     markHealthy: vi.fn(),
     markUnhealthy: vi.fn(),
     isUnhealthy: () => false,
+    getDocProxy: () => docProxy,
+    getSelectionProxy: () => selProxy,
+    wrapRange: (raw: Record<string, unknown>) => createMockRangeProxy(raw),
+    lockPrintView: vi.fn(),
+    tryAdoptActiveDoc: vi.fn().mockReturnValue(false),
   }
 
   return { ...base, ...overrides }

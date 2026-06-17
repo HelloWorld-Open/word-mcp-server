@@ -1,11 +1,17 @@
-import type { ServerContext } from "../server-context.js"
+import type { ServerContext, ReadyServerContext } from "../server-context.js"
 import { SecurityManager } from "../../security/policy.js"
 import { logAudit } from "../../security/audit.js"
 import { ComError } from "../../word/com-errors.js"
-import { WordMcpError, WordEngineTimeoutError, toMcpContent, sanitizeErrorMessage } from "../../security/errors.js"
-import { SessionDirector } from "../session-director.js"
+import { WordMcpError, WordEngineTimeoutError, ServerNotReadyError, toMcpContent, sanitizeErrorMessage } from "../../security/errors.js"
+import { isEngineError, isReadOnlyTool } from "./shared.js"
+import type { SessionDirector } from "../session-director.js"
+import type { Precondition } from "../session-director.js"
 
-type Precondition = "DOC" | "NO_DOC"
+export function ensureReady(ctx: ServerContext): asserts ctx is ReadyServerContext {
+  if (!ctx.session || !ctx.positionMap || !ctx.director) {
+    throw new ServerNotReadyError()
+  }
+}
 
 interface McpCallOptions {
   timeoutMs?: number
@@ -33,42 +39,66 @@ export function mcpCall<T extends Record<string, unknown>>(
       }
     }
 
+    ensureReady(context)
+
     const effectiveTimeout = options?.timeoutMs ?? 30000
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new WordEngineTimeoutError(toolName)), effectiveTimeout)
-    })
+    const timeoutPromise = effectiveTimeout === 0
+      ? undefined
+      : new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new WordEngineTimeoutError(toolName)), effectiveTimeout)
+        })
+
+    const abortController = effectiveTimeout > 0 ? new AbortController() : undefined
+    const signal = abortController?.signal
 
     try {
-      const text = await Promise.race([handler(args), timeoutPromise])
+      const text = abortController
+        ? await Promise.race([handler(args), new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              abortController.abort()
+              reject(new WordEngineTimeoutError(toolName))
+            }, effectiveTimeout)
+          })])
+        : await handler(args)
+      director?.circuitBreaker.onSuccess()
       director?.markHealthy()
       logAudit({ tool: toolName, durationMs: Date.now() - start })
       director?.markDirtyIfNeeded(toolName)
       director?.schedulePositionRefresh()
-      return { content: [{ type: "text" as const, text: text + (director?.captureStatusSuffix() ?? "") }] }
+      const contextSuffix = !isReadOnlyTool(toolName) ? (director?.captureContextSuffix() ?? "") : ""
+      return { content: [{ type: "text" as const, text: text + contextSuffix + (director?.captureStatusSuffix() ?? "") }] }
     } catch (err) {
       logAudit({ tool: toolName, durationMs: Date.now() - start, error: true })
       const suffix = director?.captureStatusSuffix() ?? ""
 
-      if (SessionDirector.isEngineError(err)) {
+      if (err instanceof WordEngineTimeoutError) {
+        context.session?.setBusy(true)
+      }
+
+      if (isEngineError(err)) {
+        director?.circuitBreaker.onFailure()
         try {
           await director?.recoverSession()
-        } catch {
+        } catch (recoveryErr) {
+          console.error("[mcpCall] Session recovery failed:", recoveryErr)
         }
-        if (SessionDirector.isReadOnlyTool(toolName)) {
+        if (isReadOnlyTool(toolName)) {
           try {
             const retryTimeout = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new WordEngineTimeoutError(toolName)), effectiveTimeout)
             })
             const retryText = await Promise.race([handler(args), retryTimeout])
+            director?.circuitBreaker.onSuccess()
             director?.markHealthy()
             logAudit({ tool: toolName, durationMs: Date.now() - start, retry: true })
             return { content: [{ type: "text" as const, text: retryText + suffix }] }
           } catch {
+            director?.circuitBreaker.onFailure()
           }
         }
       }
 
-      if (director && !SessionDirector.isEngineError(err)) {
+      if (director && !isEngineError(err)) {
         director.markHealthy()
       }
 

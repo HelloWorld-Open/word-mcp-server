@@ -7,3 +7,9 @@ export interface ServerContext {
   positionMap: PositionMap | null
   director: SessionDirector | null
 }
+
+export interface ReadyServerContext extends ServerContext {
+  session: IWordSession
+  positionMap: PositionMap
+  director: SessionDirector
+}

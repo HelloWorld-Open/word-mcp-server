@@ -2,7 +2,7 @@
 
 # Word MCP Server — Tool Reference
 
-> 108 tools across 12 modules.
+> 80 tools across 12 modules.
 
 ---
 
@@ -25,8 +25,7 @@
 | Tool | Description |
 |------|-------------|
 | `word_insert_paragraph` | Insert paragraph breaks |
-| `word_insert_page_break` | Insert page break |
-| `word_insert_horizontal_line` | Insert horizontal line |
+| `word_insert_break` | Insert page break or horizontal line |
 | `word_insert_list` | Insert bullet or numbered list |
 | `word_set_columns` | Set section column count (newsletter layout) |
 | `word_insert_section_break` | Insert section break (nextPage/continuous/evenPage/oddPage) |
@@ -67,19 +66,15 @@
 | `word_go_to_paragraph` | Navigate to specific paragraph by 1-based index |
 | `word_select_all` | Select all content |
 | `word_select_text` | Select text by character range |
-| `word_select_current_word` | Select word at cursor |
-| `word_select_current_paragraph` | Select paragraph at cursor |
+| `word_select_current` | Select word or paragraph at cursor |
 | `word_delete` | Delete selected content |
 
 ### Clipboard & Undo
 
 | Tool | Description |
 |------|-------------|
-| `word_copy` | Copy to clipboard |
-| `word_cut` | Cut to clipboard |
-| `word_paste` | Paste from clipboard |
-| `word_undo` | Undo last action(s) |
-| `word_redo` | Redo undone action(s) |
+| `word_clipboard` | Copy/cut/paste clipboard content |
+| `word_undo_redo` | Undo or redo last action(s) |
 | `word_get_cursor_info` | Get cursor position & selection info |
 
 ### Formatting
@@ -94,8 +89,7 @@
 | `word_list_styles` | List available styles |
 | `word_set_body_indent` | Apply first-line indent to all 'Normal' paragraphs (Chinese academic papers) |
 | `word_set_track_changes` | Enable/disable Track Changes (revision markup) |
-| `word_accept_changes` | Accept all tracked changes in the document |
-| `word_reject_changes` | Reject all tracked changes in the document |
+| `word_track_changes_apply` | Accept or reject all tracked changes |
 
 ### Tables
 
@@ -131,24 +125,11 @@
 
 | Tool | Description |
 |------|-------------|
-| `word_set_header` | Set page header |
-| `word_set_footer` | Set page footer |
+| `word_set_page_region` | Set page header or footer |
 | `word_set_page_numbers` | Add page numbers |
 | `word_insert_toc` | Insert table of contents |
 | `word_add_bookmark` | Add bookmark |
 | `word_set_watermark` | Set or remove watermark (e.g. "DRAFT") |
-
-### Manager Layer (High-level Document Builder)
-
-| Tool | Description |
-|------|-------------|
-| `word_mgr_set_header` / `word_mgr_set_footer` | Set header/footer with auto context return |
-| `word_mgr_set_page_numbers` | Add page numbers with auto context return |
-| `word_mgr_insert_table` / `word_mgr_insert_chart` / `word_mgr_insert_image` | Insert elements with auto paragraph separator |
-| `word_mgr_insert_textbox` | Insert textbox with auto cursor reset |
-| `word_mgr_add_bookmark` / `word_mgr_add_comment` / `word_mgr_add_footnote` / `word_mgr_add_hyperlink` | Add markers with auto deep cursor reset |
-| `word_mgr_insert_section_break` | Section break with auto context return |
-| `word_mgr_set_watermark` | Set watermark with auto context return |
 
 ### Semantic Navigation
 

@@ -27,10 +27,10 @@ General principles:
 5. Before export: word_stream_end to save and optionally export PDF
 
 Key workflows:
-- New doc: word_stream_start → word_stream_block → word_mgr_set_header → word_stream_end
+- New doc: word_stream_start → word_stream_block → word_set_page_region({target:'header', text:'Title', quiet:true}) → word_stream_end
 - Edit existing: word_document → word_find_text/word_select_at → word_insert_at → word_save
 - Table: word_insert_table → word_edit_cells → word_set_table_borders → word_set_cell_font
-- Review: word_set_track_changes → word_insert_at → word_accept_changes
+- Review: word_set_track_changes → word_insert_at → word_track_changes_apply({action:'accept'})
 
 Streaming session active — 4 tools are blocked: word_document, word_open, word_close, word_quit.
 Call word_stream_end to finish streaming, then those tools become available again.
@@ -98,7 +98,7 @@ During word_document/word_open..word_close, an **EDITING** sub-state is active:
 Every tool description includes "Order:" with the recommended sequence.
 
 ### New Document
-word_stream_start → word_stream_block/word_mgr_insert_table → word_mgr_set_header → word_stream_end({save:true, exportPath})
+word_stream_start → word_stream_block/word_insert_table → word_set_page_region({target:'header', text:'...', quiet:true}) → word_stream_end({save:true, exportPath})
 
 ### Edit Existing  
 word_document/word_open → word_find_text/word_select_at → word_insert_at → word_save
@@ -107,7 +107,7 @@ word_document/word_open → word_find_text/word_select_at → word_insert_at →
 word_insert_table → word_edit_cells → word_set_table_borders → word_apply_table_style → word_set_cell_font
 
 ### Track Changes Review
-word_set_track_changes → word_insert_at → word_accept_changes/word_reject_changes → word_save
+word_set_track_changes → word_insert_at → word_track_changes_apply({action:'accept'})/word_track_changes_apply({action:'reject'}) → word_save
 
 ### Template Variables
 word_stream_start({templatePath}) → word_replace_variables → word_stream_end

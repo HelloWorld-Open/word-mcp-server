@@ -1,9 +1,10 @@
 import { tmpdir } from "node:os"
-import { join, resolve, normalize } from "node:path"
+import { join } from "node:path"
 import { existsSync, copyFileSync } from "node:fs"
 import type { IWordSession } from "./session.js"
 import { DocumentRegistry } from "./document-registry.js"
 import { WordMcpError } from "../security/errors.js"
+import { normalizePath } from "./types.js"
 
 const FORMAT_EXT_MAP: Record<string, number> = {
   ".docx": 16, ".doc": 0, ".pdf": 17, ".rtf": 6, ".txt": 2,
@@ -40,6 +41,7 @@ interface PathStatus {
 
 interface WordStatusResult {
   wordRunning: boolean
+  dialogBlocked?: boolean
   activeDocument: ActiveDocumentInfo | null
   openDocuments: OpenDocumentInfo[]
   trackedByRegistry: { name: string; path: string }[]
@@ -87,14 +89,14 @@ export class WordApplicationManager {
   private isPathOpenInWord(path: string): Record<string, unknown> | null {
     const word = this.tryGetWordSafe()
     if (!word) return null
-    const keyPath = resolve(normalize(path)).toLowerCase()
+    const keyPath = normalizePath(path)
     const docs = word.Documents as { Count: number; Item: (i: number) => Record<string, unknown> }
     for (let i = 1; i <= docs.Count; i++) {
       const doc = docs.Item(i) as Record<string, unknown>
       try {
         const raw = (doc.FullName as string) ?? ""
         if (!raw) continue
-        const fp = resolve(normalize(raw)).toLowerCase()
+        const fp = normalizePath(raw)
         if (fp === keyPath) return doc
       } catch { /* skip stale */ }
     }
@@ -105,6 +107,16 @@ export class WordApplicationManager {
     const word = this.tryGetWordSafe()
     if (!word) {
       return { wordRunning: false, activeDocument: null, openDocuments: [], trackedByRegistry: [] }
+    }
+
+    // 轻量 COM 探针：检测 Word 是否被弹窗阻塞（RPC_E_CALL_REJECTED）
+    try {
+      const _ = (word as any).DisplayAlerts
+    } catch (e) {
+      const code = (e as Record<string, unknown>)?.number ?? (e as Record<string, unknown>)?.code
+      if (typeof code === "number" && code === 0x80010005) {
+        return { wordRunning: true, dialogBlocked: true, activeDocument: null, openDocuments: [], trackedByRegistry: [] }
+      }
     }
 
     const openDocuments: OpenDocumentInfo[] = []
@@ -147,7 +159,7 @@ export class WordApplicationManager {
         path: resolvedPath,
         existsOnDisk: existsSync(resolvedPath),
         isOpenInWord: this.isPathOpenInWord(resolvedPath) !== null,
-        isActive: activeDocument ? resolve(normalize(activeDocument.fullName)).toLowerCase() === resolve(normalize(resolvedPath)).toLowerCase() : false,
+        isActive: activeDocument ? normalizePath(activeDocument.fullName) === normalizePath(resolvedPath) : false,
         isTrackedByRegistry: this.registry.isOpen(resolvedPath),
       }
     }
@@ -192,8 +204,10 @@ export class WordApplicationManager {
   async createDocument(params?: { title?: string; author?: string }): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
     try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
-    const docs = w.Documents as { Add: () => Record<string, unknown> }
-    const doc = docs.Add() as Record<string, unknown>
+    const doc = this.session.comCall(() => {
+      const docs = w.Documents as { Add: () => Record<string, unknown> }
+      return docs.Add() as Record<string, unknown>
+    })
     try {
       if (params?.title) {
         const props = doc.BuiltInDocumentProperties as { Item: (n: string) => { Value: string } }
@@ -221,8 +235,10 @@ export class WordApplicationManager {
   ): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
     try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
-    const docs = w.Documents as { Add: (t: string) => Record<string, unknown> }
-    const doc = docs.Add(templatePath) as Record<string, unknown>
+    const doc = this.session.comCall(() => {
+      const docs = w.Documents as { Add: (t: string) => Record<string, unknown> }
+      return docs.Add(templatePath) as Record<string, unknown>
+    })
     try {
       if (params?.title) {
         const props = doc.BuiltInDocumentProperties as { Item: (n: string) => { Value: string } }
@@ -256,8 +272,10 @@ export class WordApplicationManager {
     const w = this.getWord()
     try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
     try { ;(w as Record<string, unknown>).FileValidation = 2 } catch { /* some Word versions lack this */ }
-    const docs = w.Documents as { Open: (p: string) => Record<string, unknown> }
-    const doc = docs.Open(path) as Record<string, unknown>
+    const doc = this.session.comCall(() => {
+      const docs = w.Documents as { Open: (p: string) => Record<string, unknown> }
+      return docs.Open(path) as Record<string, unknown>
+    })
     try { ;(doc as Record<string, unknown>).AutoUpdate = false } catch { /* ignore */ }
     this.session.setActiveDoc(doc)
     this.session.setActiveDocPath(path)
@@ -276,7 +294,7 @@ export class WordApplicationManager {
           copyFileSync(tempPath, bakPath)
         }
       } catch (e) { console.error("[saveDocument] backup failed:", e) }
-      ;(doc.SaveAs as (p: string, f: number) => void)(tempPath, 16)
+      this.session.comCall(() => { ;(doc.SaveAs as (p: string, f: number) => void)(tempPath, 16) })
       this.session.setActiveDoc(doc)
       this.session.setActiveDocPath(tempPath)
     } else {
@@ -287,7 +305,7 @@ export class WordApplicationManager {
           copyFileSync(origPath, bakPath)
         }
       } catch (e) { console.error("[saveDocument] backup failed:", e) }
-      ;(doc.Save as () => void)()
+      this.session.comCall(() => { ;(doc.Save as () => void)() })
       this.session.setActiveDocPath(doc.FullName as string)
     }
   }
@@ -301,7 +319,7 @@ export class WordApplicationManager {
         copyFileSync(path, bakPath)
       }
     } catch (e) { console.error("[saveDocumentAs] backup failed:", e) }
-    ;(doc.SaveAs as (p: string, f: number) => void)(path, f)
+    this.session.comCall(() => { ;(doc.SaveAs as (p: string, f: number) => void)(path, f) })
     this.session.setActiveDoc(doc)
     this.session.setActiveDocPath(path)
     this.registry.register(path, doc)
@@ -315,10 +333,10 @@ export class WordApplicationManager {
     // 关闭 COM 文档；异常时仍然执行状态清理
     try {
       const doc = prevDoc ?? (() => {
-        try { return this.getWord().ActiveDocument as Record<string, unknown> | undefined } catch { return undefined }
+        try { return this.session.comCall(() => this.getWord().ActiveDocument as Record<string, unknown> | undefined) } catch { return undefined }
       })()
       if (doc) {
-        ;(doc.Close as (s: boolean) => void)(saveChanges ?? false)
+        this.session.comCall(() => { ;(doc.Close as (s: boolean) => void)(saveChanges ?? false) })
       }
     } catch {
       // COM close 异常 — 继续清理内存状态

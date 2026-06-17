@@ -16,6 +16,8 @@ export interface IChartDataBridge {
 let nextTaskId = 1
 
 export class ChartDataBridge implements IChartDataBridge {
+  constructor(private options?: { forkFn?: typeof fork }) {}
+
   private worker: ChildProcess | null = null
   private pending: Map<number, { resolve: (v: { ok: boolean; series: number }) => void; timer: ReturnType<typeof setTimeout> }> = new Map()
   private idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -56,7 +58,8 @@ export class ChartDataBridge implements IChartDataBridge {
     const wait = this.restartBlockedUntil - Date.now()
     if (wait > 0) throw new Error(`Worker restart throttled (${wait}ms remaining)`)
     const workerPath = resolve(__dirname, "chart-data-worker.js")
-    const child = fork(workerPath, [], {
+    const forkFn = this.options?.forkFn ?? fork
+    const child = forkFn(workerPath, [], {
       stdio: ["pipe", "pipe", "inherit", "ipc"],
       env: { ...process.env },
     })
@@ -117,8 +120,8 @@ export class ChartDataBridge implements IChartDataBridge {
         this.worker.stdout.removeAllListeners("error")
       }
       try {
-        this.worker.send({ id: -1, params: null })
-      } catch { }
+        this.worker.send({ id: -1, params: null }) // tell worker to quit Word gracefully
+      } catch { /* worker may already be gone — force-kill will handle it */ }
       const w = this.worker
       setTimeout(() => { if (!w.killed) w.kill() }, 2000)
     }

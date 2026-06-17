@@ -2,6 +2,7 @@ import type { IWordSession } from "./session.js"
 import { type HeadingEntry } from "./types.js"
 import { WordMcpError } from "../security/errors.js"
 import { ContextSanitizer } from "./context-sanitizer.js"
+import type { IDocumentProxy, IRangeProxy, ISelectionProxy } from "./com-proxy/types.js"
 
 export interface Offset {
   direction: "before" | "after"
@@ -57,38 +58,51 @@ export class PositionMap {
   private headings: HeadingEntry[] = []
   private tables: TableEntry[] = []
   private dirty = true
+  private _tablesDirty = true
+  private _headingsDirty = true
   private lastParaCount = 0
   private lastContentEnd = 0
   private refreshPromise: Promise<void> | null = null
   private cachedTexts: string[] = []
   private cachedParaStarts: number[] = []
+  private _docVersion = 0
 
   constructor(private session: IWordSession) {}
 
   get cachedParaCount(): number { return this.lastParaCount }
+  get cachedHeadingCount(): number { return this.headings.length }
+  get cachedTableCount(): number { return this.tables.length }
+  get docVersion(): number { return this._docVersion }
 
   scheduleRefresh(): void {
     if (!this.dirty || this.refreshPromise) return
     this.refreshPromise = (async () => {
+      let attempts = 0
+      const MAX_ATTEMPTS = 3
       do {
+        attempts++
         try {
           await this.refresh()
-        } catch {
+        } catch (e) {
+          console.warn(`[PositionMap] refresh failed (attempt ${attempts}/${MAX_ATTEMPTS})`, e)
           this.dirty = true
+          if (attempts >= MAX_ATTEMPTS) {
+            this.dirty = false
+            break
+          }
+          await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempts - 1)))
         }
       } while (this.dirty)
     })().finally(() => { this.refreshPromise = null })
   }
 
   async fetchActualParaCount(): Promise<number> {
-    const doc = this.getDoc()
-    return (doc.Paragraphs as { Count: number }).Count as number
+    return this.session.getDocProxy().getParagraphs().count
   }
 
   async paraCountMatches(expected: number): Promise<boolean> {
     try {
-      const doc = this.getDoc()
-      const actual = (doc.Paragraphs as { Count: number }).Count as number
+      const actual = this.session.getDocProxy().getParagraphs().count
       return actual === expected
     } catch {
       return false
@@ -102,15 +116,24 @@ export class PositionMap {
   }
 
   async refresh(): Promise<void> {
-    const doc = this.getDoc()
-    const paras = doc.Paragraphs as { Count: number; Item: (i: number) => Record<string, unknown> }
-    const count = paras.Count as number
     this.headings = []
     this.tables = []
+    await this.refreshParagraphs()
+    await this.refreshTables()
+    await this.refreshHeadings()
+    this._tablesDirty = false
+    this._headingsDirty = false
+    this.dirty = false
+  }
+
+  private async refreshParagraphs(): Promise<void> {
+    const doc = this.getDoc()
+    const docProxy = this.session.getDocProxy()
+    const paras = doc.Paragraphs as { Count: number; Item: (i: number) => Record<string, unknown> }
+    const count = paras.Count as number
     this.lastParaCount = count
 
-    // 获取全文并本地计算段落位置（1 次 COM 调用，替代 888 次逐段调用）
-    const fullText = (doc.Content as Record<string, unknown>).Text as string
+    const fullText = docProxy.getContent().getText()
     const rawTexts = fullText.split('\r')
     if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
     const allTexts = rawTexts.slice(0, count)
@@ -123,6 +146,17 @@ export class PositionMap {
       textPos += allTexts[i - 1].length + 1
     }
     paraStarts[count + 1] = fullText.length
+
+    this.lastContentEnd = fullText.length
+    this.cachedTexts = allTexts
+    this.cachedParaStarts = paraStarts
+  }
+
+  private async refreshTables(): Promise<void> {
+    const doc = this.getDoc()
+    const count = this.lastParaCount
+    const paraStarts = this.cachedParaStarts
+    if (count === 0 || paraStarts.length < 2) return
 
     const binarySearchPara = (startPos: number): number => {
       let lo = 1, hi = count
@@ -138,7 +172,6 @@ export class PositionMap {
       return Math.min(count, Math.max(1, lo))
     }
 
-    // 先构建表格索引（包括字符范围），用于过滤表格内的标题检测
     const tables = doc.Tables as { Count: number; Item: (i: number) => Record<string, unknown> }
     const tableCount = tables.Count as number
     for (let t = 1; t <= tableCount; t++) {
@@ -149,8 +182,30 @@ export class PositionMap {
       const pi = binarySearchPara(start)
       this.tables.push({ paragraphIndex: pi, rangeStart: start, rangeEnd: end })
     }
+  }
 
-    // 使用 Range.Find 搜索标题（不影响用户光标），排除表格内部段落
+  private async refreshHeadings(): Promise<void> {
+    const docProxy = this.session.getDocProxy()
+    const allTexts = this.cachedTexts
+    const count = this.lastParaCount
+    const paraStarts = this.cachedParaStarts
+    if (count === 0 || paraStarts.length < 2) return
+
+    const binarySearchPara = (startPos: number): number => {
+      let lo = 1, hi = count
+      while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2)
+        if (startPos >= paraStarts[mid]) {
+          if (mid >= count || startPos < paraStarts[mid + 1]) return mid
+          lo = mid + 1
+        } else {
+          hi = mid - 1
+        }
+      }
+      return Math.min(count, Math.max(1, lo))
+    }
+
+    this.headings = []
     const headingEntries: Array<{ pi: number; level: number }> = []
     const headingSet = new Set<number>()
 
@@ -162,8 +217,8 @@ export class PositionMap {
     for (const fmt of styleFormats) {
       for (let level = 1; level <= 9; level++) {
         try {
-          const contentRange = (doc.Content as Record<string, unknown>).Duplicate as Record<string, unknown>
-          const find = contentRange.Find as Record<string, unknown>
+          const contentRange = docProxy.getContent().duplicate()
+          const find = contentRange.getFind()
           ;(find.ClearFormatting as () => void)()
           find.Style = fmt(level)
           find.Text = ""
@@ -175,10 +230,9 @@ export class PositionMap {
               "", false, false, false, false, false, true, 0, true, "", 0
             )
             if (!found) break
-            const start = contentRange.Start as number
+            const start = contentRange.getStart()
             const pi = binarySearchPara(start)
 
-            // 跳过表格内部的段落（表格单元格可能误继承标题样式）
             const insideTable = this.tables.some(t => start >= t.rangeStart && start < t.rangeEnd)
             if (!headingSet.has(pi) && pi >= 1 && pi <= count && !insideTable) {
               headingSet.add(pi)
@@ -194,36 +248,62 @@ export class PositionMap {
       const text = ContextSanitizer.stripBel(allTexts[e.pi - 1] ?? "")
       this.headings.push({ text, level: e.level, paragraphIndex: e.pi })
     }
-
-    this.lastContentEnd = fullText.length
-    this.cachedTexts = allTexts
-    this.cachedParaStarts = paraStarts
-    this.dirty = false
   }
 
   async ensureFresh(): Promise<void> {
+    await this.ensureFreshInternal(true, true)
+  }
+
+  private async ensureFreshInternal(includeTables: boolean, includeHeadings: boolean): Promise<void> {
     if (this.refreshPromise) {
       await this.refreshPromise
       return
     }
-    if (this.dirty) { await this.refresh(); return }
+
+    if (this.dirty) {
+      await this.refreshParagraphs()
+      this._tablesDirty = true
+      this._headingsDirty = true
+    }
+
     try {
-      const doc = this.getDoc()
-      const currentCount = (doc.Paragraphs as { Count: number }).Count as number
-      const currentContentEnd = (doc.Content as Record<string, unknown>).End as number
+      const docProxy = this.session.getDocProxy()
+      const currentCount = docProxy.getParagraphs().count
+      const currentContentEnd = docProxy.getContent().getEnd()
+
       if (currentCount !== this.lastParaCount) {
-        await this.refresh()
-      } else if (currentContentEnd !== this.lastContentEnd) {
+        await this.refreshParagraphs()
+        this._tablesDirty = true
+        this._headingsDirty = true
+      } else if (currentContentEnd !== this.lastContentEnd && !this.dirty) {
         await this.refreshContentOnly()
       }
     } catch {
-      await this.refresh()
+      await this.refreshParagraphs()
+      this._tablesDirty = true
+      this._headingsDirty = true
     }
+
+    if (includeTables && this._tablesDirty && this.lastParaCount > 0) {
+      this.tables = []
+      await this.refreshTables()
+      this._tablesDirty = false
+    }
+    if (includeHeadings && this._headingsDirty && this.lastParaCount > 0) {
+      this.headings = []
+      await this.refreshHeadings()
+      this._headingsDirty = false
+    }
+
+    this.dirty = false
+  }
+
+  async ensureFreshParagraphsOnly(): Promise<void> {
+    await this.ensureFreshInternal(false, false)
   }
 
   private async refreshContentOnly(): Promise<void> {
-    const doc = this.getDoc()
-    const fullText = (doc.Content as Record<string, unknown>).Text as string
+    const fullText = this.session.getDocProxy().getContent().getText()
     const rawTexts = fullText.split('\r')
     if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
     const allTexts = rawTexts.slice(0, this.lastParaCount)
@@ -235,19 +315,83 @@ export class PositionMap {
 
     this.cachedTexts = allTexts
     this.lastContentEnd = fullText.length
+    this._tablesDirty = false
+    this._headingsDirty = false
     this.dirty = false
   }
 
   markDirty(): void {
     this.dirty = true
+    this._docVersion++
   }
 
   getHeadings(): HeadingEntry[] {
     return this.headings
   }
 
+  getHeadingPath(paraIndex: number): HeadingEntry[] {
+    const headings = this.headings
+    if (headings.length === 0) return []
+
+    let lo = 0, hi = headings.length - 1
+    let nearestIdx = -1
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (headings[mid].paragraphIndex <= paraIndex) {
+        nearestIdx = mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+
+    if (nearestIdx === -1) return []
+
+    const path: HeadingEntry[] = [headings[nearestIdx]]
+    let currentLevel = headings[nearestIdx].level
+    for (let i = nearestIdx - 1; i >= 0; i--) {
+      if (headings[i].level < currentLevel) {
+        path.unshift(headings[i])
+        currentLevel = headings[i].level
+      }
+    }
+    return path
+  }
+
+  getParagraphIndex(charPos: number): number {
+    const starts = this.cachedParaStarts
+    if (starts.length < 2) return 1
+    const paraCount = starts.length - 2
+    let lo = 1, hi = paraCount
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (charPos >= starts[mid]) {
+        if (mid >= paraCount || charPos < starts[mid + 1]) return mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return Math.min(paraCount, Math.max(1, lo))
+  }
+
   async resolve(locator: Locator, skipFresh?: boolean): Promise<ResolvedPosition> {
-    if (!skipFresh) await this.ensureFresh()
+    if (!skipFresh) {
+      switch (locator.by) {
+        case "heading":
+          await this.ensureFreshInternal(true, true)
+          break
+        case "paragraph":
+          await this.ensureFreshInternal(true, true)
+          break
+        case "table":
+          await this.ensureFreshInternal(true, false)
+          break
+        case "bookmark":
+          await this.ensureFreshInternal(false, false)
+          break
+      }
+    }
 
     switch (locator.by) {
       case "heading": return this.resolveHeading(locator)
@@ -332,14 +476,14 @@ export class PositionMap {
   }
 
   private async resolveParagraphCOM(locator: ParagraphLocator): Promise<ResolvedPosition> {
-    const doc = this.getDoc()
-    const count = (doc.Paragraphs as { Count: number }).Count as number
+    const docProxy = this.session.getDocProxy()
+    const count = docProxy.getParagraphs().count
 
     const candidates: number[] = []
     const matchText = locator.match
     if (matchText) {
       const mode = locator.matchMode ?? "contains"
-      const fullText = (doc.Content as Record<string, unknown>).Text as string
+      const fullText = docProxy.getContent().getText()
       const rawTexts = fullText.split('\r')
       if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
       const allTexts = rawTexts.slice(0, count)
@@ -416,8 +560,9 @@ export class PositionMap {
           const base = this.applyOffset(1, locator.offset)
           return { ...base, headingContext: null }
         }
-        const paraCount = (doc.Paragraphs as { Count: number }).Count as number
-        const fullText = (doc.Content as Record<string, unknown>).Text as string
+        const docProxy = this.session.getDocProxy()
+        const paraCount = docProxy.getParagraphs().count
+        const fullText = docProxy.getContent().getText()
         const rawTexts = fullText.split('\r')
         if (rawTexts.length > 0 && rawTexts[rawTexts.length - 1] === '') rawTexts.pop()
         const allTexts = rawTexts.slice(0, paraCount)

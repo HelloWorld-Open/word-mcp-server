@@ -4,6 +4,10 @@ import { join } from "node:path"
 import { createRequire } from "node:module"
 import { ProcessMonitor } from "./process-monitor.js"
 import { TransientComError, FatalComError } from "./com-errors.js"
+import type { IDocumentProxy, ISelectionProxy, IRangeProxy } from "./com-proxy/types.js"
+import { DocumentProxy } from "./com-proxy/document-proxy.js"
+import { SelectionProxy } from "./com-proxy/selection-proxy.js"
+import { RangeProxy } from "./com-proxy/range-proxy.js"
 
 const require = createRequire(import.meta.url)
 
@@ -26,10 +30,20 @@ export interface IWordSession {
   withScreenOff<T>(fn: () => Promise<T>): Promise<T>
   healthCheck(): boolean
   recover(): Promise<void>
-  comCall<T>(fn: () => T): T
+  comCall<T>(fn: () => T, signal?: AbortSignal): T
   markHealthy(): void
   markUnhealthy(): void
   isUnhealthy(): boolean
+  setBusy(busy: boolean): void
+  isBusy(): boolean
+  getLastCallStart(): number
+  getDocProxy(): IDocumentProxy
+  getSelectionProxy(): ISelectionProxy
+  wrapRange(raw: Record<string, unknown>): IRangeProxy
+  log(level: string, msg: string): void
+  lockPrintView(): void
+  /** Try to detect and adopt an already-open ActiveDocument from COM. Returns true if adopted. */
+  tryAdoptActiveDoc(): boolean
 }
 
 const TRANSIENT_HRESULTS = new Set([
@@ -45,27 +59,74 @@ function isTransientComError(err: unknown): boolean {
   return typeof code === "number" && TRANSIENT_HRESULTS.has(code)
 }
 
-function defaultWinaxLoader(): WinaxModule {
-  return require("winax") as WinaxModule
-}
-
 export class WordSession implements IWordSession {
   private word: Record<string, unknown> | null = null
   private _activeDoc: Record<string, unknown> | null = null
   private _activeDocPath: string | null = null
   private onLog: ((level: string, message: string) => void) | null = null
-  private winaxMod: WinaxModule
+  private _winaxMod: WinaxModule | null = null
   private _unhealthy = false
   private _recovering = false
+  private _busy = false
+  private _lastCallStart = 0
   private monitor: ProcessMonitor
+  private _docProxy: IDocumentProxy | null = null
+  private _selProxy: ISelectionProxy | null = null
+  private _rangeProxyCache = new WeakMap<Record<string, unknown>, IRangeProxy>()
 
   constructor(winaxLoader?: () => WinaxModule) {
-    this.winaxMod = (winaxLoader ?? defaultWinaxLoader)()
     this.monitor = new ProcessMonitor(3000)
+    if (winaxLoader) this._winaxMod = winaxLoader()
+  }
+
+  private getWinax(): WinaxModule {
+    if (!this._winaxMod) {
+      this._winaxMod = require("winax") as WinaxModule
+    }
+    return this._winaxMod
+  }
+
+  getDocProxy(): IDocumentProxy {
+    const doc = this._activeDoc
+    if (!doc) throw new Error("No active document — cannot create DocumentProxy")
+    if (!this._docProxy) {
+      this._docProxy = new DocumentProxy(doc, this)
+    }
+    return this._docProxy
+  }
+
+  getSelectionProxy(): ISelectionProxy {
+    if (!this._selProxy) {
+      const sel = (() => {
+        try {
+          return this.comCall(() =>
+            (this.application?.Selection as Record<string, unknown>) as Record<string, unknown>
+          )
+        } catch {
+          return {} as Record<string, unknown>
+        }
+      })()
+      this._selProxy = new SelectionProxy(sel, this)
+    }
+    return this._selProxy
+  }
+
+  wrapRange(raw: Record<string, unknown>): IRangeProxy {
+    let p = this._rangeProxyCache.get(raw)
+    if (!p) {
+      p = new RangeProxy(raw, this)
+      this._rangeProxyCache.set(raw, p)
+    }
+    return p
   }
 
   setOnLog(handler: (level: string, message: string) => void): void {
     this.onLog = handler
+  }
+
+  log(level: string, msg: string): void {
+    this.onLog?.(level, msg)
+    if (level === "error") console.error(msg)
   }
 
   private _cleanupRecoveryFiles(): void {
@@ -89,14 +150,16 @@ export class WordSession implements IWordSession {
   start(): void {
     if (this.word) return
     this._cleanupRecoveryFiles()
-    this.monitor.start()
     this.onLog?.("info", "Creating Word.Application via winax")
-    const app = new this.winaxMod.Object("Word.Application") as Record<string, unknown>
+    const winaxMod = this.getWinax()
+    const app = new winaxMod.Object("Word.Application") as Record<string, unknown>
     app.AutomationSecurity = 3
     app.DisplayAlerts = 0
     try { ;(app as any).ShowStartupDialog = false } catch { /* Word 2013+ only */ }
     try { ;(app as any).Visible = true } catch (e) { this.onLog?.("warn", `Visible=true failed: ${e}`) }
     this.word = app
+    this.lockPrintView()
+    this.monitor.start()
     this._unhealthy = false
     this.onLog?.("info", "Word.Application created successfully")
   }
@@ -123,6 +186,9 @@ export class WordSession implements IWordSession {
 
   setActiveDoc(doc: Record<string, unknown> | null): void {
     this._activeDoc = doc
+    this._docProxy = null
+    this._selProxy = null
+    this._rangeProxyCache = new WeakMap()
   }
 
   setActiveDocPath(path: string | null): void {
@@ -139,6 +205,19 @@ export class WordSession implements IWordSession {
 
   isUnhealthy(): boolean {
     return this._unhealthy
+  }
+
+  setBusy(busy: boolean): void {
+    this._busy = busy
+    if (!busy) this._lastCallStart = 0
+  }
+
+  isBusy(): boolean {
+    return this._busy
+  }
+
+  getLastCallStart(): number {
+    return this._lastCallStart
   }
 
   quit(): void {
@@ -172,6 +251,9 @@ export class WordSession implements IWordSession {
       this.word = null
       this._activeDoc = null
       this._activeDocPath = null
+      this._docProxy = null
+      this._selProxy = null
+      this._rangeProxyCache = new WeakMap()
     }
 
     // Fallback: kill by PID if process still running
@@ -208,35 +290,70 @@ export class WordSession implements IWordSession {
   async recover(): Promise<void> {
     if (this._recovering) return
     this._recovering = true
+    this._busy = true
     this.onLog?.("info", "Starting Word session recovery...")
 
-    // 1. 清理内存状态（不做 COM 操作）
+    // 1. 先记录 PID，用于强制杀进程（必须在清空 word 之前获取）
+    const pid = this.monitor.getPid()
+
+    // 2. 清理内存状态（不做 COM 操作）
     const oldWord = this.word
     this.word = null
     this._activeDoc = null
     this._activeDocPath = null
 
-    // 2. 尝试通知旧对象退出（不阻塞）
+    // 3. 释放 COM 引用（尽力，不阻塞）
     if (oldWord) {
-      try { ;(oldWord.Quit as () => void)() } catch { /* ignore */ }
       try { ;(oldWord.Release as () => void)() } catch { /* ignore */ }
     }
 
-    // 3. 等待 COM 释放完成（仅当 monitor 至少完成过一次检查时）
-    //    跳过从未检查过的场景（测试环境或从未成功启动过），避免乐观 _alive 导致死等
-    if (this.monitor.lastCheckTime() > 0) {
+    // 4. 强制杀进程 — taskkill 比 oldWord.Quit() 更可靠（弹窗也能杀掉）
+    if (pid) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          exec(`taskkill /PID ${pid} /F /T`, { timeout: 5000 }, (err) => {
+            if (err) reject(err)
+            else resolve()
+          })
+        })
+        this.onLog?.("info", `Killed WINWORD.EXE (PID: ${pid}) during recovery`)
+      } catch {
+        this.onLog?.("warn", `taskkill for PID ${pid} failed (may already be dead)`)
+      }
+    }
+
+    // 5. 等待进程完全退出
+    if (pid && this.monitor.lastCheckTime() > 0) {
       await this.monitor.waitForExit(10000)
     }
 
-    // 4. 新建 COM 会话
+    // 6. 清理残留恢复文件
+    this._cleanupRecoveryFiles()
+
+    // 7. 新建 COM 会话
+    this._busy = false
     this._unhealthy = false
     this._recovering = false
     this.start()
+    this.monitor.markAlive()
     this.onLog?.("info", "Word session recovery complete")
   }
 
-  comCall<T>(fn: () => T): T {
+  comCall<T>(fn: () => T, signal?: AbortSignal): T {
+    if (signal?.aborted) {
+      this.onLog?.("warn", "COM call blocked: signal aborted (previous timeout or recovery)")
+      throw new TransientComError("Call aborted — previous operation timed out or session is recovering")
+    }
+    if (this._busy) {
+      this.onLog?.("warn", "COM call blocked: session marked busy (request stacking barrier)")
+      throw new TransientComError("Session busy — a prior operation is still in progress or timed out")
+    }
+    if (this._recovering) {
+      this.onLog?.("warn", "COM call blocked: session is recovering")
+      throw new TransientComError("Session is recovering from a failure, try again shortly")
+    }
     try {
+      this._lastCallStart = Date.now()
       const result = fn()
       this._unhealthy = false
       return result
@@ -248,6 +365,8 @@ export class WordSession implements IWordSession {
         throw new FatalComError(msg)
       }
       throw new TransientComError(msg)
+    } finally {
+      this._lastCallStart = 0
     }
   }
 
@@ -265,6 +384,36 @@ export class WordSession implements IWordSession {
       return await fn()
     } finally {
       try { ;(this.word as Record<string, unknown>).ScreenUpdating = true } catch { /* ignore */ }
+    }
+  }
+
+  lockPrintView(): void {
+    try {
+      const win = (this.word as Record<string, unknown>).ActiveWindow as Record<string, unknown> | undefined
+      if (!win) return
+      const view = win.View as Record<string, unknown> | undefined
+      if (view) {
+        view.Type = 3 // wdPrintView
+        this.onLog?.("debug", "View locked to Print Layout")
+      }
+    } catch { /* ActiveWindow may not exist before a document is opened */ }
+  }
+
+  tryAdoptActiveDoc(): boolean {
+    try {
+      const app = this.application
+      const doc = app.ActiveDocument as Record<string, unknown> | undefined
+      if (!doc) return false
+      this.setActiveDoc(doc)
+      try {
+        const fullName = doc.FullName as string
+        this.setActiveDocPath(fullName)
+      } catch {
+        // FullName may fail for unsaved/untitled documents
+      }
+      return true
+    } catch {
+      return false
     }
   }
 }

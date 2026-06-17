@@ -2,7 +2,7 @@
 
 # Word MCP Server — 工具参考
 
-> 108 个工具，涵盖 12 个模块。
+> 80 个工具，涵盖 12 个模块。
 
 ---
 
@@ -25,8 +25,7 @@
 | 工具 | 描述 |
 |------|------|
 | `word_insert_paragraph` | 插入段落换行 |
-| `word_insert_page_break` | 插入分页符 |
-| `word_insert_horizontal_line` | 插入水平分割线 |
+| `word_insert_break` | 插入分页符或水平分割线 |
 | `word_insert_list` | 插入项目符号或编号列表 |
 | `word_set_columns` | 设置当前节的分栏数 |
 | `word_insert_section_break` | 插入分节符 |
@@ -67,19 +66,15 @@
 | `word_go_to_paragraph` | 按段落索引跳转 |
 | `word_select_all` | 全选 |
 | `word_select_text` | 按字符范围选择 |
-| `word_select_current_word` | 选择光标所在词 |
-| `word_select_current_paragraph` | 选择光标所在段落 |
+| `word_select_current` | 选择光标所在词或段落 |
 | `word_delete` | 删除选中内容 |
 
 ### 📋 剪贴板与撤销
 
 | 工具 | 描述 |
 |------|------|
-| `word_copy` | 复制到剪贴板 |
-| `word_cut` | 剪切到剪贴板 |
-| `word_paste` | 从剪贴板粘贴 |
-| `word_undo` | 撤销上一步操作 |
-| `word_redo` | 重做已撤销的操作 |
+| `word_clipboard` | 复制/剪切/粘贴剪贴板内容 |
+| `word_undo_redo` | 撤销或重做操作 |
 | `word_get_cursor_info` | 获取光标位置/选区信息 |
 
 ### 🎨 格式编排
@@ -94,8 +89,7 @@
 | `word_list_styles` | 列出可用样式 |
 | `word_set_body_indent` | 为所有"正文"段落设置首行缩进（中文学术论文） |
 | `word_set_track_changes` | 开启/关闭修订模式 |
-| `word_accept_changes` | 接受文档中所有修订 |
-| `word_reject_changes` | 拒绝文档中所有修订 |
+| `word_track_changes_apply` | 接受或拒绝所有修订 |
 
 ### 📊 表格
 
@@ -131,24 +125,11 @@
 
 | 工具 | 描述 |
 |------|------|
-| `word_set_header` | 设置页眉 |
-| `word_set_footer` | 设置页脚 |
+| `word_set_page_region` | 设置页眉或页脚 |
 | `word_set_page_numbers` | 插入页码 |
 | `word_insert_toc` | 插入目录 |
 | `word_add_bookmark` | 添加书签 |
 | `word_set_watermark` | 设置/移除水印 |
-
-### 🏗️ Manager 层（高层 API）
-
-| 工具 | 描述 |
-|------|------|
-| `word_mgr_set_header` / `word_mgr_set_footer` | 设置页眉/页脚（自动返回正文） |
-| `word_mgr_set_page_numbers` | 插入页码（自动返回正文） |
-| `word_mgr_insert_table` / `word_mgr_insert_chart` / `word_mgr_insert_image` | 插入元素（自动段落分隔） |
-| `word_mgr_insert_textbox` | 插入文本框（自动复位光标） |
-| `word_mgr_add_bookmark` / `word_mgr_add_comment` / `word_mgr_add_footnote` / `word_mgr_add_hyperlink` | 添加标记（自动深度复位光标） |
-| `word_mgr_insert_section_break` | 分节符（自动返回正文） |
-| `word_mgr_set_watermark` | 水印（自动返回正文） |
 
 ### 🧭 语义定位
 

@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WordDocument } from "../../word/document.js"
 import { SecurityManager } from "../../security/policy.js"
 import type { ServerContext } from "../server-context.js"
-import { mcpCall } from "./helper.js"
+import { createRegTool } from "./shared.js"
 
 export function registerReaderTools(
   server: McpServer,
@@ -11,40 +11,38 @@ export function registerReaderTools(
   docOps: WordDocument,
   security: SecurityManager,
 ): void {
-  server.registerTool(
-    "word_get_text",
+  const regTool = createRegTool(server, security, context)
+  regTool("word_get_text",
     {
       description: "Get the full text content of the current document. WHEN: need to read what's written, verify content, or analyze text. NOT: need structure/headings? use word_get_structure.",
     },
-    mcpCall(security, context, "word_get_text", async () => {
+    async () => {
       const text = await docOps.getFullText()
       return text
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_paragraph",
+  regTool("word_get_paragraph",
     {
       description: "Get text from a specific paragraph by index. WHEN: need to read a specific section. NOT: want all text? use word_get_text.",
       inputSchema: {
         index: z.number().int().positive().describe("Paragraph index (1-based). Use word_get_structure() to find heading paragraph indices."),
       },
     },
-    mcpCall(security, context, "word_get_paragraph", async ({ index }) => {
+    async ({ index }) => {
       const text = await docOps.getParagraphText(index)
       return `Action: Paragraph ${index}\nDetail: "${text.slice(0, 200)}${text.length > 200 ? "..." : ""}"\nNext: word_get_paragraph({index:${index + 1}}) or word_get_text()`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_export_to_pdf",
+  regTool("word_export_to_pdf",
     {
       description: "Export the current document to PDF without changing the document. WHEN: need a PDF copy for sharing or preview. NOT: want to save document in another format? use word_save_as.",
       inputSchema: {
         path: z.string().min(1).max(4096).optional().describe("Output PDF path (default: same name as source document with .pdf extension)"),
       },
     },
-    mcpCall(security, context, "word_export_to_pdf", async ({ path }) => {
+    async ({ path }) => {
       let outputPath = path
       if (!outputPath) {
         const info = await docOps.getInfo()
@@ -57,18 +55,17 @@ export function registerReaderTools(
       const safePath = security.pathSanitizer.validateForWrite(outputPath)
       await docOps.exportToPdf(safePath)
       return `Action: PDF exported\nDetail: ${safePath}\nNext: word_get_status() or word_document({path:"${safePath.replace(/\\/g, "\\\\")}"})`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_table_data",
+  regTool("word_get_table_data",
     {
       description: "Extract table content as structured data. WHEN: need to verify table content, read table data, or check table structure. NOT: want to edit a table? use word_edit_cells.",
       inputSchema: {
         index: z.number().int().positive().default(1).describe("Table index (1-based). Use word_get_info to check table count."),
       },
     },
-    mcpCall(security, context, "word_get_table_data", async ({ index }) => {
+    async ({ index }) => {
       const result = await docOps.getTableData(index)
       const header = `Table ${index} of ${result.tableCount} (${result.rows} rows × ${result.columns} columns)`
       const lines = result.data.map((row, ri) =>
@@ -78,15 +75,14 @@ export function registerReaderTools(
         ? `\nNext: word_get_table_data({index:${index + 1 > result.tableCount ? 1 : index + 1}}) to check other tables`
         : ""
       return `Action: ${header}\nDetail:\n${lines.join("\n")}${suffix}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_comments",
+  regTool("word_get_comments",
     {
       description: "List all comments in the document. WHEN: need to review existing comments. NOT: want to add a comment? use word_add_comment.",
     },
-    mcpCall(security, context, "word_get_comments", async () => {
+    async () => {
       const comments = await docOps.getComments()
       if (comments.length === 0) {
         return `Action: No comments found\nDetail: The document has no comments`
@@ -94,15 +90,14 @@ export function registerReaderTools(
       return `Action: ${comments.length} comment(s) found\nDetail:\n${comments.map(c =>
         `  #${c.index} by "${c.author}": "${c.text.slice(0, 200)}${c.text.length > 200 ? "..." : ""}"`
       ).join("\n")}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_bookmarks",
+  regTool("word_get_bookmarks",
     {
       description: "List all bookmarks in the document. WHEN: need to see available bookmarks for navigation. NOT: want to add a bookmark? use word_add_bookmark.",
     },
-    mcpCall(security, context, "word_get_bookmarks", async () => {
+    async () => {
       const bookmarks = await docOps.getBookmarks()
       if (bookmarks.length === 0) {
         return `Action: No bookmarks found\nDetail: The document has no bookmarks`
@@ -110,15 +105,14 @@ export function registerReaderTools(
       return `Action: ${bookmarks.length} bookmark(s) found\nDetail:\n${bookmarks.map(b =>
         `  #${b.index}: "${b.name}"`
       ).join("\n")}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_lists",
+  regTool("word_get_lists",
     {
       description: "List all bullet and numbered lists in the document with hierarchy. WHEN: need to review list structure or verify list content. NOT: want raw text? use word_get_text.",
     },
-    mcpCall(security, context, "word_get_lists", async () => {
+    async () => {
       const result = await docOps.getLists()
       if (result.listCount === 0) {
         return `Action: No lists found\nDetail: The document has no lists`
@@ -134,20 +128,19 @@ export function registerReaderTools(
         }
       }
       return `Action: ${result.listCount} list(s) found\nDetail:\n${lines.join("\n")}`
-    }),
+    },
   )
 
-  server.registerTool(
-    "word_get_sections",
+  regTool("word_get_sections",
     {
       description: "List all sections with page setup info (orientation, columns, page size). WHEN: need to understand document layout or section boundaries. NOT: need heading structure? use word_get_structure.",
     },
-    mcpCall(security, context, "word_get_sections", async () => {
+    async () => {
       const result = await docOps.getSections()
       const lines = result.sections.map(s =>
         `  Section ${s.index}: ${s.orientation}, ${s.columnCount} column(s), ${s.pageWidth.toFixed(0)}×${s.pageHeight.toFixed(0)}pt`
       )
       return `Action: ${result.count} section(s) found\nDetail:\n${lines.join("\n")}`
-    }),
+    },
   )
 }

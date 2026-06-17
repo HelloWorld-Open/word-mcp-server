@@ -1,4 +1,4 @@
-import { resolve, normalize } from "node:path"
+import { normalizePath } from "./types.js"
 
 export interface RegisteredDocument {
   doc: Record<string, unknown>
@@ -64,6 +64,6 @@ export class DocumentRegistry {
   }
 
   private keyFor(p: string): string {
-    return resolve(normalize(p.trim())).toLowerCase()
+    return normalizePath(p)
   }
 }

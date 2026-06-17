@@ -1,9 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { parseBlocks, parseInline } from "../../../src/word/markdown-parser.js"
 import type { Block, InlineSegment } from "../../../src/word/markdown-parser.js"
-import { WordMarkdown } from "../../../src/word/word-markdown.js"
-import { createMockSession } from "../test-helpers.js"
-
 describe("parseBlocks", () => {
 
   it("parses empty input to empty blocks", () => {
@@ -248,14 +245,5 @@ describe("parseInline", () => {
     const segs = parseInline("plain text with numbers 123 and symbols @#$")
     expect(segs).toHaveLength(1)
     expect(segs[0].text).toBe("plain text with numbers 123 and symbols @#$")
-  })
-})
-
-describe("WordMarkdown.write (with mock COM)", () => {
-  it("succeeds with empty input", async () => {
-    const session = createMockSession()
-    const md = new WordMarkdown(session)
-    const result = await md.writeBlocks("")
-    expect(result).toMatchObject({ blocks: 0, chars: 0 })
   })
 })

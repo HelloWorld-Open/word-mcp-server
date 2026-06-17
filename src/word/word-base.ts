@@ -1,4 +1,5 @@
 import type { IWordSession } from "./session.js"
+import type { IDocumentProxy, ISelectionProxy } from "./com-proxy/types.js"
 import { ContextSanitizer, type ICursorContext } from "./context-sanitizer.js"
 import { WordMcpError } from "../security/errors.js"
 
@@ -7,6 +8,15 @@ export class WordBase {
 
   constructor(protected session: IWordSession, cursor?: ICursorContext) {
     this.cursor = cursor ?? new ContextSanitizer(session)
+  }
+
+  protected getSelProxy(): ISelectionProxy {
+    this.cursor.markSelectionRead()
+    return this.session.getSelectionProxy()
+  }
+
+  protected getDocProxy(): IDocumentProxy {
+    return this.session.getDocProxy()
   }
 
   protected numOrEnum<T>(val: unknown, map: Record<string, T>): T | number {
@@ -20,26 +30,15 @@ export class WordBase {
     return val as number
   }
 
-  protected getSelection(): Record<string, unknown> {
-    this.cursor.markSelectionRead()
-    const sel = this.session.comCall(() =>
-      (this.getWord().Selection as Record<string, unknown>) as Record<string, unknown>
-    )
-    if (!sel) {
-      throw new Error("COM Selection proxy returned null — Word COM connection may be transiently unavailable")
-    }
-    return sel
-  }
-
   protected requireSelection(): void {
-    const sel = this.getSelection()
-    const start = sel.Start as number
-    const end = sel.End as number
+    const sel = this.getSelProxy()
+    const start = sel.getStart()
+    const end = sel.getEnd()
     if (start === end) throw new WordMcpError(
       "No text is selected",
       "NO_SELECTION",
       false,
-      "Use word_select_all(), word_select_text(), word_find_text(), or word_select_current_word() first."
+      "Use word_select_all(), word_select_text(), word_find_text(), or word_select_current({scope:\"word\"}) first."
     )
   }
 
@@ -47,12 +46,6 @@ export class WordBase {
     return this.session.comCall(() =>
       this.session.application as Record<string, unknown>
     )
-  }
-
-  protected requireDoc(): Record<string, unknown> {
-    const doc = this.session.activeDoc ?? (this.getWord().ActiveDocument as Record<string, unknown>)
-    if (!doc) throw new WordMcpError("No document is open", "NO_DOCUMENT", false, "Use word_document(path) to open a file, or word_stream_start to create a new document.")
-    return doc
   }
 
   protected collapseSelection(): void {

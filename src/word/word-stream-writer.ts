@@ -1,11 +1,14 @@
 import { WordBase } from "./word-base.js"
+import type { IDocumentProxy, ISelectionProxy } from "./com-proxy/types.js"
 import type { IWordSession } from "./session.js"
-import type { WordMarkdown } from "./word-markdown.js"
 import type { WordApplicationManager } from "./application.js"
-import type { WordFormatting } from "./formatting.js"
+import type { WordContentWriter } from "./word-content-writer.js"
+import type { WordFormatter } from "./word-formatter.js"
 import type { IStreamLock } from "./types.js"
+import { WordMcpError } from "../security/errors.js"
+import { EXPORT_FORMAT_PDF } from "./types.js"
 
-import type { StyleProfile } from "./formatting.js"
+import type { StyleProfile } from "./word-formatter.js"
 
 export interface StreamStartParams {
   title?: string
@@ -45,9 +48,9 @@ export class StreamingMarkdownWriter extends WordBase {
 
   constructor(
     session: IWordSession,
-    private markdown: WordMarkdown,
+    private contentWriter: WordContentWriter,
     private appManager: WordApplicationManager,
-    private formatting: WordFormatting,
+    private formatting: WordFormatter,
     private director: IStreamLock,
   ) {
     super(session)
@@ -62,14 +65,13 @@ export class StreamingMarkdownWriter extends WordBase {
     if (this.streamSession?.isActive) {
       try {
         // 试探获取活跃文档，若 COM 已断开或文档已关闭则静默清理
-        const doc = this.session.activeDoc
-        if (doc) {
-          const _ = (doc.Name as string) // 探活
+        if (this.session.activeDoc) {
+          const _ = this.getDocProxy().getName()
           // 文档还在，不能覆盖——通知用户先正常结束
-          throw new Error("已有活跃的流式会话，请先调用 word_stream_end 结束")
+          throw new WordMcpError("Active stream session exists. Call word_stream_end first.", "STREAM_SESSION_ACTIVE", true, "End the current session with word_stream_end then retry.")
         }
       } catch (e) {
-        if ((e as Error).message?.includes("已有活跃的流式会话")) throw e
+        if ((e as Error).message?.includes("Active stream session exists")) throw e
         // COM 或文档已不可用，自动清理旧会话
       }
       this.streamSession = null
@@ -77,21 +79,21 @@ export class StreamingMarkdownWriter extends WordBase {
 
     if (this.session.activeDoc) {
       try {
-        const doc = this.session.activeDoc
-        const saved = (doc.Saved as boolean) ?? true
+        const dp = this.getDocProxy()
+        const saved = dp.getSaved()
         if (!saved) {
-          const name = (doc.Name as string) ?? "未命名文档"
-          throw new Error(`文档"${name}"有未保存的更改。请先用 word_save 保存，或明确放弃更改后再启动流式会话。`)
+          const name = dp.getName() ?? "未命名文档"
+          throw new WordMcpError(`Document "${name}" has unsaved changes. Use word_save to save, or close without saving then retry.`, "UNSAVED_CHANGES", true, "Use word_save to save the current document before starting a stream session.")
         }
       } catch (e) {
-        if ((e as Error).message?.includes("未保存的更改")) throw e
+        if ((e as Error).message?.includes("unsaved changes")) throw e
       }
       await this.appManager.closeDocument(false)
     }
     await this.session.start()
 
     const lockErr = this.director.acquireStreamLock("word_stream_start")
-    if (lockErr) throw new Error(lockErr)
+    if (lockErr) throw new WordMcpError(lockErr, "STREAM_LOCK_DENIED", true, lockErr)
 
     try {
       if (params.templatePath) {
@@ -142,17 +144,17 @@ export class StreamingMarkdownWriter extends WordBase {
       startTime: Date.now(),
       isActive: true,
     }
-    return "流式会话已启动"
+    return "Stream session started"
   }
 
   async writeBlock(text: string): Promise<StreamBlockResult> {
     if (!this.streamSession?.isActive) {
-      throw new Error("没有活跃的流式会话。请先调用 word_stream_start 创建文档。")
+      throw new WordMcpError("No active stream session. Use word_stream_start to create a document.", "NO_STREAM_SESSION", true, "Create a new document with word_stream_start.")
     }
 
     this.goToEnd()
     try {
-      const result = await this.markdown.writeBlocks(text)
+      const result = await this.contentWriter.writeBlocks(text)
       this.director.refreshWatchdog()
       this.streamSession.blockCount += result.blocks
       this.streamSession.charCount += result.chars
@@ -166,7 +168,7 @@ export class StreamingMarkdownWriter extends WordBase {
 
   async end(params: { save?: boolean; exportPath?: string }): Promise<StreamEndResult> {
     if (!this.streamSession) {
-      throw new Error("没有活跃的流式会话。")
+      throw new WordMcpError("No active stream session.", "NO_STREAM_SESSION", true, "Create a new document with word_stream_start.")
     }
 
     const session = this.streamSession
@@ -179,9 +181,8 @@ export class StreamingMarkdownWriter extends WordBase {
     // 若文档已不存在（被外部关闭），跳过所有文档操作，直接返回统计
     let docAlive = false
     try {
-      const doc = this.session.activeDoc
-      if (doc) {
-        const _ = (doc.Name as string)
+      if (this.session.activeDoc) {
+        const _ = this.getDocProxy().getName()
         docAlive = true
       }
     } catch { /* doc is gone */ }
@@ -189,21 +190,19 @@ export class StreamingMarkdownWriter extends WordBase {
     if (docAlive) {
       try {
         try {
-          ;(this.getSelection().TypeParagraph as () => void)()
+          this.getSelProxy().typeParagraph()
         } catch { }
 
         if (params.save !== false) {
           await this.appManager.saveDocument()
           try {
-            const doc = this.requireDoc()
-            savedPath = (doc.FullName as string) || undefined
+            savedPath = this.getDocProxy().getFullName() || undefined
           } catch { }
         }
 
         if (params.exportPath) {
           try {
-            const doc = this.requireDoc()
-            ;(doc.ExportAsFixedFormat as (path: string, format: number) => void)(params.exportPath, 17)
+            this.getDocProxy().exportAsFixedFormat(params.exportPath, EXPORT_FORMAT_PDF)
             pdfPath = params.exportPath
           } catch { }
         }
