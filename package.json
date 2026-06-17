@@ -26,12 +26,6 @@
   "engines": {
     "node": ">=20"
   },
-  "os": [
-    "win32"
-  ],
-  "cpu": [
-    "x64"
-  ],
   "keywords": [
     "mcp",
     "word",
