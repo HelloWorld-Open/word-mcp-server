@@ -1,5 +1,8 @@
 > [English](./README.md) | [中文](./README.zh-CN.md)
 
+> ⚠️ **视频提示**：下方演示视频托管在 GitHub，Gitee 上可能无法播放。  
+> 可从仓库的 `assets/demo/demo.mp4` 下载后本地观看。
+
 # Word MCP Server
 
 <p align="center">
