@@ -19,7 +19,7 @@ export function registerWhereAmITool(
 
   regTool("word_where_am_i",
     {
-      description: "Get current cursor structural position in the document. Returns semantic heading path, paragraph offset under current heading, table context, and document stats. WHEN: after navigating with word_select_at, word_find_text, or word_go_to_paragraph to verify cursor location. NOT: need document structure overview? use doc://structure resource or word_get_structure.",
+      description: "WHEN: need to verify current cursor location after navigating with word_select_at, word_find_text, or word_go_to_paragraph. WHAT: returns the semantic heading path, position relative to nearest heading, table context (if inside a table), and document stats. CONSTRAINT: read-only; does NOT modify cursor or document. For document-level heading overview, use word_get_structure.",
       inputSchema: {},
     },
     async () => {

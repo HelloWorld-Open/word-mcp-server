@@ -24,6 +24,7 @@ export class WordContentWriter extends WordBase {
       getSelection: () => this.getSelProxy(),
       requireDoc: () => this.getDocProxy(),
       goToEnd: () => this.goToEnd(),
+      withScreenOff: (fn) => this.session.withScreenOff(fn),
     })
   }
 
@@ -368,70 +369,76 @@ export class WordContentWriter extends WordBase {
     try { sel.setStyle("Normal") } catch { /* ignore */ }
     const tables = doc.getTables()
     const table = tables.add(sel.getRange().raw, params.rows, params.columns)
-    if (params.autoFitBehavior != null) {
-      ;(table.AutoFitBehavior as (b: number) => void)(this.numOrEnum(params.autoFitBehavior, AUTO_FIT))
-    }
     let failCount = 0
-    if (params.data) {
-      const TIME_BUDGET = 50
-      let batchStart = Date.now()
-      for (let r = 0; r < params.data.length && r < params.rows; r++) {
-        const row = params.data[r]
-        for (let c = 0; c < row.length && c < params.columns; c++) {
-          try {
-            const cellObj = (table.Cell as (r: number, c: number) => Record<string, unknown>)(r + 1, c + 1)
-            const cellRange = cellObj.Range as Record<string, unknown>
-            cellRange.Text = row[c]
-          } catch { failCount++ }
-        }
-        if (Date.now() - batchStart >= TIME_BUDGET) {
-          await new Promise(resolve => setImmediate(resolve))
-          batchStart = Date.now()
-        }
-      }
-    }
-    WordFormatter.applyDefaultBorders(table)
-    if (params.data && params.data.length > 0) {
-      let styled = false
-      try {
-        const styles = doc.getStyles()
-        const candidates = ["Grid Table 4 - Accent 1", "网格表4 - 着色1", "Grid Table 4"]
-        for (const name of candidates) {
-          for (let i = 1; i <= styles.count; i++) {
-            if (((styles.item(i).NameLocal as string) ?? "").toLowerCase() === name.toLowerCase()) {
-              ;(table.Style as string) = name
-              styled = true
-              break
-            }
+    // Wrap cell-fill + styling in withScreenOff to avoid per-call UI repaints
+    await this.session.withScreenOff(async () => {
+      if (params.data) {
+        for (let r = 0; r < params.data.length && r < params.rows; r++) {
+          const row = params.data[r]
+          for (let c = 0; c < row.length && c < params.columns; c++) {
+            try {
+              const cellObj = (table.Cell as (r: number, c: number) => Record<string, unknown>)(r + 1, c + 1)
+              const cellRange = cellObj.Range as Record<string, unknown>
+              cellRange.Text = row[c]
+            } catch { failCount++ }
           }
-          if (styled) break
         }
-      } catch { /* style may not exist */ }
-      if (!styled) {
-        try {
-          const firstRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
-          ;((firstRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
-          ;(firstRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF3E2D9
-        } catch { /* ignore */ }
       }
+      WordFormatter.applyDefaultBorders(table)
+      if (params.data && params.data.length > 0) {
+        let styled = false
+        try {
+          const styles = doc.getStyles()
+          const candidates = ["Grid Table 4 - Accent 1", "网格表4 - 着色1", "Grid Table 4"]
+          for (const name of candidates) {
+            for (let i = 1; i <= styles.count; i++) {
+              if (((styles.item(i).NameLocal as string) ?? "").toLowerCase() === name.toLowerCase()) {
+                ;(table.Style as string) = name
+                styled = true
+                break
+              }
+            }
+            if (styled) break
+          }
+        } catch { /* style may not exist */ }
+        if (!styled) {
+          try {
+            const firstRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
+            ;((firstRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
+            ;(firstRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xF3E2D9
+          } catch { /* ignore */ }
+        }
+      }
+    })
+    // AutoFitBehavior after screen re-enabled — single repaint only
+    if (params.autoFitBehavior != null) {
+      try { ;(table.AutoFitBehavior as (b: number) => void)(this.numOrEnum(params.autoFitBehavior, AUTO_FIT)) } catch { /* ignore */ }
     }
-    // Move cursor reliably past the table.
-    // Selection.EndKey(wdStory) is unreliable when cursor is inside a table —
-    // it may only move to cell end, leaving cursor trapped inside the table.
-    // This causes the NEXT insertTable to create a nested table → COM hang.
+    // Move cursor reliably past the table with explicit wdParagraph unit (4)
     try {
-      const tableEnd = (table.Range as Record<string, unknown>).End as number
-      const docEnd = doc.getContent().getEnd()
-      const targetPos = Math.min(tableEnd, docEnd)
-      doc.getRange(targetPos, targetPos).select()
-      sel.collapse(0)
+      const rawTableRange = table.Range as Record<string, unknown>
+      const nextRange = (rawTableRange.Next as (unit?: number) => Record<string, unknown> | undefined)(4)
+      if (nextRange) {
+        const nextStart = nextRange.Start as number
+        if (typeof nextStart === "number") {
+          doc.getRange(nextStart, nextStart).select()
+          sel.collapse(0)
+        } else {
+          throw new Error("no next range start")
+        }
+      } else {
+        throw new Error("no content after table")
+      }
     } catch {
-      // Fallback: move to document end via Range (more reliable than endKey)
+      // Fallback: table at end of document — InsertParagraph to create space
       try {
-        const docEnd = doc.getContent().getEnd()
-        doc.getRange(docEnd, docEnd).select()
-        sel.collapse(0)
+        const contentEnd = doc.getContent().getEnd()
+        const insertAt = doc.getRange(contentEnd, contentEnd).raw
+        ;(insertAt.InsertParagraph as () => void)()
+        const newEnd = doc.getContent().getEnd()
+        doc.getRange(newEnd, newEnd).select()
       } catch { /* ignore */ }
+      sel.collapse(0)
     }
     sel.typeParagraph()
     return { rows: params.rows, columns: params.columns, failCount }

@@ -112,13 +112,13 @@ describe("WordSession", () => {
     expect(session.healthCheck()).toBe(true)
   })
 
-  it("setOnLog stores handler", () => {
+  it("setLogger stores logger and uses it for logging", () => {
     const { mockWinax } = createMockWinax()
     const session = new WordSession(() => mockWinax)
-    const handler = vi.fn()
-    session.setOnLog(handler)
+    const infoFn = vi.fn()
+    session.setLogger({ info: infoFn } as any)
     session.start()
-    expect(handler).toHaveBeenCalledWith("info", expect.stringContaining("Creating Word.Application"))
+    expect(infoFn).toHaveBeenCalledWith(expect.stringContaining("Creating Word.Application"))
   })
 
   it("recover() restarts session asynchronously", async () => {

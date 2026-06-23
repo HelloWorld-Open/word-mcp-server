@@ -5,6 +5,23 @@ import { WordMcpError } from "../security/errors.js"
 import { ContextSanitizer } from "./context-sanitizer.js"
 import type { IDocumentProxy } from "./com-proxy/types.js"
 
+const MAX_TEXT_RETURN_LENGTH = parseInt(process.env.MAX_TEXT_RETURN_LENGTH ?? "10000", 10)
+const TEXT_PREVIEW_LENGTH = 5000
+
+export interface TextSummary {
+  text: string
+  totalChars: number
+  returnedChars: number
+  paraCount: number
+  headingCount: number
+  hasMore: boolean
+  nextAction: {
+    tool: "word_get_paragraph"
+    args: { index: number }
+    description: string
+  }
+}
+
 export class WordDocument {
   constructor(
     private session: IWordSession,
@@ -46,11 +63,38 @@ export class WordDocument {
     }
   }
 
-  getFullText(): string {
+  async getFullText(): Promise<string | TextSummary> {
     const doc = this.getDoc()
     const content = doc.getContent()
     const text = content.getText() ?? ""
-    return text
+
+    if (text.length <= MAX_TEXT_RETURN_LENGTH) return text
+
+    const preview = text.slice(0, TEXT_PREVIEW_LENGTH)
+    let paraCount = 0
+    let headingCount = 0
+    try {
+      const info = this.getInfo()
+      paraCount = info.paragraphCount
+    } catch { /* best-effort */ }
+    try {
+      const structure = await this.getStructure()
+      headingCount = structure.headings.length
+    } catch { /* best-effort */ }
+
+    return {
+      text: preview,
+      totalChars: text.length,
+      returnedChars: preview.length,
+      paraCount,
+      headingCount,
+      hasMore: true,
+      nextAction: {
+        tool: "word_get_paragraph",
+        args: { index: 1 },
+        description: `Document is ${text.length} chars total. Read individual paragraphs with word_get_paragraph or get the heading outline with word_get_structure.`,
+      },
+    }
   }
 
   getParagraphText(index: number): string {

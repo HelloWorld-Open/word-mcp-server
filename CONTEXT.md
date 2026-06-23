@@ -41,3 +41,88 @@
 **StreamingMarkdownWriter** — 流式文档写入引擎（`word/word-stream-writer.ts`）。支持在单个 COM 会话中分块写入 Markdown 内容，内容在 Word 窗口中即时呈现。配合 `word_stream_start/block/end` 工具链，实现零样板代码的文档生成。自动管理样式继承、光标定位和批处理刷新。支持 `baseStyleProfile` 在文档创建时预配置样式定义（字体、段落），markdown 写入时自动继承。
 
 **COM Proxy** — 类型化的 COM 对象包装层（`word/com-proxy/`）。`DocumentProxy` / `SelectionProxy` / `RangeProxy` 分别封装最常用的三个 COM 对象，消除全库 `Record<string, unknown>` 类型不安全。在 Session 层通过 `getDocProxy()` / `getSelectionProxy()` / `wrapRange()` 懒加载工厂构造。子对象（Find、Font、Shading 等）保持 Record 逃生口，待后续细分。
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        MCP Client (stdio)                        │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │     parent.js        │  ← 看门狗进程，监控/重启子进程
+                    │  (Watchdog + spawn)  │
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │      child.js        │  ← MCP Server 主进程
+                    │  (createServer)      │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+     ┌────────▼──────┐ ┌──────▼───────┐ ┌──────▼────────┐
+     │ Server Layer  │ │  Word Layer  │ │ Security Layer│
+     │               │ │              │ │               │
+     │ SessionDirector│ │ WordSession  │ │ SecurityManager│
+     │ ServerContext │ │ COM Proxies  │ │ PathSanitizer │
+     │ Tool Modules  │ │ ContentWriter│ │ RateLimiter   │
+     │ Prompts       │ │ Stream Writer│ │ Audit         │
+     │ Resources     │ │ PositionMap  │ │               │
+     └───────────────┘ └──────┬───────┘ └───────────────┘
+                              │
+                    ┌─────────▼─────────┐
+                    │   WINWORD.EXE     │  ← COM 自动化
+                    │   (winax addon)   │
+                    └───────────────────┘
+```
+
+## 数据流
+
+1. **MCP 客户端** 通过 stdio 发送 JSON-RPC 请求
+2. **parent.js** 看门狗接收请求，转发给 child.js
+3. **child.js** 中的 `createServer` 初始化所有模块
+4. **SessionDirector** 执行前置检查（状态机、速率限制、电路断路器）
+5. **工具处理器** 调用 Word 层模块执行实际操作
+6. **COM Proxy** 层将操作转换为 Word COM API 调用
+7. 结果通过 stdio 返回给 MCP 客户端
+
+## 关键设计模式
+
+### 流式文档写入
+```
+word_stream_start({baseStyleProfile}) → word_stream_block(×N) → word_stream_end()
+```
+- 一次性预配样式，后续内容自动继承
+- 批处理刷新（200ms 批次），避免 COM 调用过载
+- Markdown 解析 → 分段渲染 → Word 即时呈现
+
+### 工具注册管道
+```
+createRegTool → mcpCall 中间件:
+  速率限制 → 前置检查 → ensureReady → 超时 → 处理器 → 审计 → 电路断路器 → 恢复
+```
+
+### 光标管理
+- `ContextSanitizer` 确保编辑前光标在主正文
+- 页眉/页脚/表格/水印操作后自动恢复光标位置
+- 使用 `wasInNonBody` 标记追踪上下文转换
+
+### 会话恢复
+- `WordSession.comCall()` 包装所有 COM 调用
+- 瞬态错误（RPC_E_CALL_REJECTED 等）自动标记不健康
+- `SessionDirector` 看门狗检测挂起的 COM 调用并触发恢复
+- 恢复流程：杀进程 → 清理 → 重建 COM 会话
+
+### 位置缓存
+- `PositionMap` 缓存标题、表格、段落位置
+- 使用二进制搜索实现 O(1) 查找
+- 文档修改后自动标记脏数据，延迟刷新
+
+## 安全机制
+
+- **路径消毒** — 防止目录遍历攻击，限制允许访问的目录
+- **速率限制** — 防止工具调用过载
+- **Zod 验证** — 所有输入参数类型安全验证
+- **宏禁用** — `AutomationSecurity = 3`（高安全级别）
+- **审计日志** — 记录所有工具调用和错误

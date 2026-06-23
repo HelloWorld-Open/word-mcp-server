@@ -15,13 +15,13 @@ export function registerCursorTools(
 
   regTool("word_find_text",
     {
-      description: "Find text and position cursor at the match. WHEN: need to locate a keyword before editing. NOT: want to also replace? use word_find_replace.",
+      description: "WHEN: need to locate a keyword or phrase before editing. WHAT: searches forward/backward from cursor and positions cursor at the first match. CONSTRAINT: cursor moves to match; does NOT modify text. Use word_find_replace if replacement is needed.",
       inputSchema: {
-        findText: z.string().min(1).max(5000).describe("Text to search for"),
-        matchCase: z.boolean().optional().describe("Case sensitive search"),
-        matchWholeWord: z.boolean().optional().describe("Match whole words only"),
+        findText: z.string().min(1).max(5000).describe("Text to search for (case-insensitive by default)"),
+        matchCase: z.boolean().optional().describe("Case sensitive search (default: false)"),
+        matchWholeWord: z.boolean().optional().describe("Match whole words only (default: false)"),
         direction: z.enum(["forward", "backward"]).optional().describe("Search direction (default: forward)"),
-        wrap: z.boolean().optional().describe("Wrap around to beginning/end (default: true)"),
+        wrap: z.boolean().optional().describe("Wrap around to beginning/end if not found (default: true)"),
       },
     },
     async ({ findText, matchCase, matchWholeWord, direction, wrap }) => {
@@ -33,13 +33,13 @@ export function registerCursorTools(
 
   regTool("word_find_replace",
     {
-      description: "Find and replace text in the document. WHEN: need to replace specific words or phrases across the document. NOT: just want to locate text without replacing? use word_find_text.",
+      description: "WHEN: need to replace specific words or phrases across the entire document. WHAT: searches for text and replaces with new text, optionally case-sensitive or whole-word. CONSTRAINT: modifies document content; use word_find_text first to preview matches. Supports replace-all or single replace.",
       inputSchema: {
         findText: z.string().min(1).max(5000).describe("Text to find"),
         replaceWith: z.string().max(5000).describe("Replacement text"),
-        matchCase: z.boolean().optional().describe("Case sensitive search"),
-        matchWholeWord: z.boolean().optional().describe("Match whole words only"),
-        replaceAll: z.boolean().optional().describe("Replace all occurrences (default: true)"),
+        matchCase: z.boolean().optional().describe("Case sensitive search (default: false)"),
+        matchWholeWord: z.boolean().optional().describe("Match whole words only (default: false)"),
+        replaceAll: z.boolean().optional().describe("Replace all occurrences (default: true). Set to false to replace only the first occurrence."),
       },
     },
     async ({ findText, replaceWith, matchCase, matchWholeWord, replaceAll }) => {
@@ -51,9 +51,9 @@ export function registerCursorTools(
 
   regTool("word_go_to_paragraph",
     {
-      description: "Navigate to a specific paragraph by 1-based index. WHEN: you know the paragraph index from word_get_structure. NOT: want to navigate by heading name? use word_select_at({by:'heading', match:'...'}).",
+      description: "WHEN: you know the exact paragraph index from word_get_structure. WHAT: moves cursor to the start of a specific paragraph by 1-based index. CONSTRAINT: requires valid paragraph index; use word_get_structure() first to obtain indices. For heading-based navigation, use word_select_at({by:'heading', match:'...'}).",
       inputSchema: {
-        index: z.number().int().min(1).max(1000000).describe("Paragraph index (1-based)"),
+        index: z.number().int().min(1).max(1000000).describe("Paragraph index (1-based, obtained from word_get_structure output like 'H1 ¶3')"),
       },
     },
     async ({ index }) => {
@@ -64,7 +64,7 @@ export function registerCursorTools(
 
   regTool("word_go_to",
     {
-      description: "Navigate to a specific location. WHEN: need to jump to a page/section/line/bookmark/end. NOT: know the paragraph index? use word_go_to_paragraph.",
+      description: "WHEN: need to jump to a structural location (page/section/line/bookmark/document-end). WHAT: navigates to the first/last/next/previous occurrence of the target type. CONSTRAINT: 'bookmark' requires an existing bookmark created via word_add_bookmark. For exact paragraph navigation, use word_go_to_paragraph.",
       inputSchema: {
         what: z.enum(["page", "section", "line", "bookmark", "end"]).optional().describe("Target (default: page)"),
         which: z.enum(["first", "last", "next", "previous"]).optional().describe("Which occurrence (default: first)"),
@@ -79,7 +79,7 @@ export function registerCursorTools(
 
   regTool("word_select_all",
     {
-      description: "Select all content in the document. WHEN: need to format/copy/delete the entire document. NOT: want a specific range? use word_select_text.",
+      description: "WHEN: need to format, copy, or delete the entire document at once. WHAT: selects all content in the active document (Ctrl+A). CONSTRAINT: selection covers the full document range; subsequent actions (delete, set_font, copy) apply to every paragraph.",
     },
     async () => {
       await cursor.selectAll()
@@ -89,9 +89,9 @@ export function registerCursorTools(
 
   regTool("word_select_text",
     {
-      description: "Select a specific range of text by character position. WHEN: need to select a precise range for formatting or copying. NOT: want to select all content? use word_select_all. NOT: want to select the word/paragraph under cursor? use word_select_current.",
+      description: "WHEN: need to select a precise character range for targeted formatting or copying. WHAT: selects text from character position N with length L (0-based). CONSTRAINT: requires knowing start/length from word_get_cursor_info. For whole-document selection use word_select_all; for current word/paragraph use word_select_current.",
       inputSchema: {
-        start: z.number().int().min(0).describe("Starting character position (0-based)"),
+        start: z.number().int().min(0).describe("Starting character position (0-based). Use word_get_cursor_info to find positions."),
         length: z.number().int().min(1).max(1000000).describe("Number of characters to select"),
       },
     },
@@ -103,9 +103,9 @@ export function registerCursorTools(
 
   regTool("word_select_current",
     {
-      description: "Select the word or paragraph at the current cursor position. WHEN: need to quickly format or copy the word/paragraph under cursor. NOT: want to select a specific character range? use word_select_text.",
+      description: "WHEN: need to quickly format or copy the word or paragraph under the cursor without specifying character positions. WHAT: selects either the current word (cursor within a word) or the current paragraph (cursor within any paragraph). CONSTRAINT: scope=word selects one word; scope=paragraph selects the entire containing paragraph.",
       inputSchema: {
-        scope: z.enum(["word", "paragraph"]).describe("Selection scope: 'word' or 'paragraph'"),
+        scope: z.enum(["word", "paragraph"]).describe("Selection scope: 'word' for the single word under cursor, 'paragraph' for the entire current paragraph"),
       },
     },
     async ({ scope }) => {
@@ -120,7 +120,7 @@ export function registerCursorTools(
 
   regTool("word_delete",
     {
-      description: "Delete the currently selected text. WHEN: want to remove selected content from the document. NOT: nothing selected? use word_select_text or word_select_all first to select content to delete.",
+      description: "WHEN: want to remove selected content from the document. WHAT: deletes the current selection (like pressing Delete key). CONSTRAINT: requires prior selection via word_select_text, word_select_all, or word_select_current. Does NOT work on empty selection; use word_backspace instead.",
     },
     async () => {
       await cursor.deleteSelection()
@@ -130,9 +130,9 @@ export function registerCursorTools(
 
   regTool("word_backspace",
     {
-      description: "Delete characters before the cursor. WHEN: need to remove a few characters one at a time like pressing Backspace. NOT: want to delete selected text? select first then use word_delete.",
+      description: "WHEN: need to delete the last N characters before the cursor (like pressing Backspace N times). WHAT: removes characters one at a time before the cursor position. CONSTRAINT: max 1000 characters at once. For large deletions, select text first then use word_delete.",
       inputSchema: {
-        count: z.number().int().min(1).max(1000).optional().describe("Number of backspaces (default: 1)"),
+        count: z.number().int().min(1).max(1000).optional().describe("Number of backspaces (default: 1). Each backspace deletes one character before the cursor."),
       },
     },
     async ({ count }) => {
@@ -143,9 +143,9 @@ export function registerCursorTools(
 
   regTool("word_clipboard",
     {
-      description: "Copy or cut selected content to/from clipboard, or paste clipboard content at cursor. WHEN: need to move or duplicate content within or between documents. NOT: want to type new text? use word_stream_block or word_insert_at.",
+      description: "WHEN: need to move or duplicate content within or between documents (cut/copy/paste). WHAT: action=copy copies selection to clipboard; action=cut removes and copies; action=paste inserts clipboard at cursor. CONSTRAINT: copy/cut require prior selection; paste requires clipboard content from a prior copy/cut.",
       inputSchema: {
-        action: z.enum(["copy", "cut", "paste"]).describe("'copy' to copy selection, 'cut' to remove and copy, 'paste' to insert clipboard"),
+        action: z.enum(["copy", "cut", "paste"]).describe("'copy' to copy selection to clipboard, 'cut' to remove and copy, 'paste' to insert clipboard content at cursor"),
       },
     },
     async ({ action }) => {
@@ -164,10 +164,10 @@ export function registerCursorTools(
 
   regTool("word_undo_redo",
     {
-      description: "Undo or redo the last action(s). WHEN: need to revert a mistake or restore after undo. NOT: undo history is cleared after word_save.",
+      description: "WHEN: need to revert a mistake or restore after undoing too far. WHAT: action=undo reverses the last N actions; action=redo re-applies previously undone N actions. CONSTRAINT: undo history is cleared after word_save. Cannot undo past a save boundary. Max 100 steps at once.",
       inputSchema: {
-        action: z.enum(["undo", "redo"]).describe("'undo' to revert, 'redo' to restore"),
-        count: z.number().int().min(1).max(100).optional().describe("Number of steps (default: 1)"),
+        action: z.enum(["undo", "redo"]).describe("'undo' to revert recent actions, 'redo' to restore previously undone actions"),
+        count: z.number().int().min(1).max(100).optional().describe("Number of steps to undo/redo (default: 1). Each step reverses one prior action."),
       },
     },
     async ({ action, count }) => {
@@ -182,7 +182,7 @@ export function registerCursorTools(
 
   regTool("word_get_cursor_info",
     {
-      description: "Get current cursor position info. WHEN: need to know cursor location and selection range before editing. NOT: want full document stats? use word_get_info.",
+      description: "WHEN: need to know the current cursor position and selection range before editing. WHAT: returns cursor character offset, selection status, and selected text preview. CONSTRAINT: read-only; does NOT modify cursor position or document. Use before word_select_text or word_insert_at to verify position.",
     },
     async () => {
       const info = await cursor.getCursorInfo()

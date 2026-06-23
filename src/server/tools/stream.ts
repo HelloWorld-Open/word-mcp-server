@@ -14,47 +14,47 @@ export function registerStreamTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_stream_start",
     {
-      description: "启动一个流式文档会话，创建新文档。Start a streaming session to create a new document with styles, page setup, and optional template. WHEN: creating a new document (recommended approach for all new docs). NOT: want to edit an existing document? use word_document.",
+      description: "WHEN: creating a new document from scratch. WHAT: starts a streaming session — creates a new document with optional title, author, page setup, and base style configuration. Content is written incrementally with word_stream_block. CONSTRAINT: auto-closes any existing active document. For editing existing files, use word_document instead.",
       inputSchema: {
-        title: z.string().max(255).optional().describe("文档标题"),
-        author: z.string().max(255).optional().describe("文档作者"),
-        templatePath: z.string().max(4096).optional().describe(".dotx 或 .dotm 模板文件完整路径"),
-        orientation: z.enum(["portrait", "landscape"]).optional().describe("页面方向"),
-        topMargin: z.number().min(0).max(100).optional().describe("上边距 (cm)"),
-        bottomMargin: z.number().min(0).max(100).optional().describe("下边距 (cm)"),
-        leftMargin: z.number().min(0).max(100).optional().describe("左边距 (cm)"),
-        rightMargin: z.number().min(0).max(100).optional().describe("右边距 (cm)"),
+        title: z.string().max(255).optional().describe("Document title (set in document properties and title bar)"),
+        author: z.string().max(255).optional().describe("Document author (set in document properties)"),
+        templatePath: z.string().max(4096).optional().describe("Full path to .dotx or .dotm template file. Styles and content from the template are inherited."),
+        orientation: z.enum(["portrait", "landscape"]).optional().describe("Page orientation (default: portrait)"),
+        topMargin: z.number().min(0).max(100).optional().describe("Top margin in cm (default: 2.54)"),
+        bottomMargin: z.number().min(0).max(100).optional().describe("Bottom margin in cm (default: 2.54)"),
+        leftMargin: z.number().min(0).max(100).optional().describe("Left margin in cm (default: 3.17 for binding)"),
+        rightMargin: z.number().min(0).max(100).optional().describe("Right margin in cm (default: 3.17)"),
         baseStyleProfile: z.record(
           z.string().max(100),
           z.object({
             font: z.object({
-              name: z.string().max(100).optional().describe("字体名称"),
-              size: z.number().min(1).max(1638).optional().describe("字号 (pt)"),
-              bold: z.boolean().optional().describe("加粗"),
-              italic: z.boolean().optional().describe("斜体"),
-              color: ColorSchema.optional().describe("字体颜色"),
-              underline: z.enum(["none", "single", "double", "wavy"]).optional().describe("下划线"),
-              strikethrough: z.boolean().optional().describe("删除线"),
-              highlight: z.string().max(20).optional().describe("高亮色 (17 色枚举名 或 #RRGGBB hex)"),
+              name: z.string().max(100).optional().describe("Font name (e.g., 'SimSun' for Chinese body, 'Calibri' for English)"),
+              size: z.number().min(1).max(1638).optional().describe("Font size in points (e.g., 12 for body, 16 for heading)"),
+              bold: z.boolean().optional().describe("Bold"),
+              italic: z.boolean().optional().describe("Italic"),
+              color: ColorSchema.optional().describe("Font color"),
+              underline: z.enum(["none", "single", "double", "wavy"]).optional().describe("Underline style"),
+              strikethrough: z.boolean().optional().describe("Strikethrough"),
+              highlight: z.string().max(20).optional().describe("Highlight color: enum name (e.g., 'yellow') or hex (e.g., '#FFF0E0')"),
             }).optional(),
             paragraph: z.object({
-              alignment: z.enum(["left", "center", "right", "justify"]).optional().describe("对齐方式"),
-              firstLineIndent: z.number().min(-100).max(100).optional().describe("首行缩进 (cm)"),
-              spaceBefore: z.number().min(0).max(1584).optional().describe("段前间距 (pt)"),
-              spaceAfter: z.number().min(0).max(1584).optional().describe("段后间距 (pt)"),
-              lineSpacing: z.number().min(0).max(1584).optional().describe("行距值 (pt/倍数)"),
-              lineSpacingRule: z.enum(["single", "one_point_five", "double", "at_least", "exactly", "multiple"]).optional().describe("行距规则"),
-              keepWithNext: z.boolean().optional().describe("与下段同页"),
-              pageBreakBefore: z.boolean().optional().describe("段前分页"),
+              alignment: z.enum(["left", "center", "right", "justify"]).optional().describe("Paragraph alignment"),
+              firstLineIndent: z.number().min(-100).max(100).optional().describe("First line indent in cm (0.74 ≈ 2 Chinese chars at 12pt)"),
+              spaceBefore: z.number().min(0).max(1584).optional().describe("Space before paragraph in points"),
+              spaceAfter: z.number().min(0).max(1584).optional().describe("Space after paragraph in points"),
+              lineSpacing: z.number().min(0).max(1584).optional().describe("Line spacing value. With 'multiple' rule: 1.5=1.5x spacing."),
+              lineSpacingRule: z.enum(["single", "one_point_five", "double", "at_least", "exactly", "multiple"]).optional().describe("Line spacing rule (default: 'multiple' with lineSpacing=1.15)"),
+              keepWithNext: z.boolean().optional().describe("Keep this paragraph with the next (prevents page break between them)"),
+              pageBreakBefore: z.boolean().optional().describe("Always start this paragraph on a new page"),
               borders: z.object({
-                style: z.enum(["none", "single", "dot", "dash", "double"]).describe("边框线型"),
-                color: ColorSchema.optional().describe("边框颜色"),
-                size: z.number().min(1).max(48).optional().describe("线宽 (1/4pt)"),
-                sides: z.array(z.enum(["top", "bottom", "left", "right"])).optional().describe("应用到的边，默认四边"),
+                style: z.enum(["none", "single", "dot", "dash", "double"]).describe("Border line style"),
+                color: ColorSchema.optional().describe("Border color"),
+                size: z.number().min(1).max(48).optional().describe("Line width in quarter-points (8 = 1pt)"),
+                sides: z.array(z.enum(["top", "bottom", "left", "right"])).optional().describe("Which sides to apply border (default: all four)"),
               }).optional(),
             }).optional(),
           }),
-        ).optional().describe("内置样式配置，如 Normal、Heading 1 等。在文档创建时修改样式定义，所有应用该样式的内容自动继承格式"),
+        ).optional().describe("Pre-configure built-in styles (Normal, Heading 1-9, Title, etc.). Font and paragraph settings defined here are inherited by all content using those styles — zero per-block COM overhead."),
       },
     },
     async (args) => {
@@ -68,24 +68,23 @@ export function registerStreamTools(
 
   regTool("word_stream_block",
     {
-      description: "写入 markdown 内容块。Write a markdown content block into the current streaming session — content appears in Word in real time. WHEN: after word_stream_start, to write document content in chapters. NOT: no active streaming session? call word_stream_start first.",
+      description: "WHEN: after word_stream_start, to write document content incrementally in chapters/sections. WHAT: writes a Markdown content block into the active streaming session — content appears in Word in real time. CONSTRAINT: requires an active streaming session created by word_stream_start. Supports headings, bold, italic, lists, tables, code blocks, blockquotes.",
       inputSchema: {
-        text: z.string().min(1).max(100000).describe("Markdown 内容（单个或多个块，建议按自然章节分批发送）"),
+        text: z.string().min(1).max(100000).describe("Markdown content to write. Send chapters/sections one at a time. Supports: # H1, ## H2, **bold**, *italic*, - lists, 1. numbered, |table|, ```code```, > quote, --- hr."),
       },
     },
     async (args) => {
       const result = await streamWriter.writeBlock(args.text)
       return `Written ${result.chars} chars (${result.blockType}), total ${result.blockIndex} blocks`
     },
-    { timeoutMs: 0 },
   )
 
   regTool("word_stream_end",
     {
-      description: "结束流式文档会话。End the streaming session, save the document, and optionally export to PDF. WHEN: finished writing all content with word_stream_block. NOT: want to write more content? use word_stream_block instead.",
+      description: "WHEN: finished writing all content with word_stream_block calls. WHAT: ends the streaming session, saves the document, and optionally exports to PDF. CONSTRAINT: after this call, no more word_stream_block calls are allowed. Use word_document to reopen the saved file for further editing.",
       inputSchema: {
-        save: z.boolean().optional().describe("是否保存文档（默认 true）"),
-        exportPath: z.string().max(4096).optional().describe("可选 PDF 导出路径"),
+        save: z.boolean().optional().describe("Whether to save the document (default: true). Set false to discard the streaming session."),
+        exportPath: z.string().max(4096).optional().describe("Optional PDF export path (e.g., 'C:\\output\\report.pdf'). Only valid when save=true."),
       },
     },
     async (args) => {

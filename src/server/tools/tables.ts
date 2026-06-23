@@ -16,12 +16,12 @@ export function registerTableTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_insert_table",
     {
-      description: "Insert a table. WHEN: cursor is where the table should appear. NOT: want to fill cells immediately? pass data param.",
+      description: "WHEN: the user wants to add tabular data to the current document. WHAT: creates a new table at the cursor position with N rows × M columns, optionally filled with data. CONSTRAINT: max 500 rows × 100 columns. Fails if cursor is inside a header/footer. For batch-filling existing tables, use word_edit_cells.",
       inputSchema: {
-        rows: z.number().int().min(1).max(500).describe("Number of rows"),
-        columns: z.number().int().min(1).max(100).describe("Number of columns"),
-        data: z.array(z.array(z.string().max(100000)).max(100)).max(1000).optional().describe("Optional 2D cell data"),
-        autoFitBehavior: z.enum(["fixed", "contents", "window"]).optional().describe("Auto-fit behavior"),
+        rows: z.number().int().min(1).max(500).describe("Number of rows (max 500)"),
+        columns: z.number().int().min(1).max(100).describe("Number of columns (max 100)"),
+        data: z.array(z.array(z.string().max(100000)).max(100)).max(1000).optional().describe("Optional 2D cell data array (array of rows, each row is array of cell strings). Example: [['Name','Age','City'],['Alice','30','NYC']]"),
+        autoFitBehavior: z.enum(["fixed", "contents", "window"]).optional().describe("Auto-fit behavior: 'fixed'=fixed column widths, 'contents'=fit to content, 'window'=fit to page width"),
         quiet: z.boolean().optional().describe("简洁输出模式"),
       },
     },
@@ -35,9 +35,9 @@ export function registerTableTools(
 
   regTool("word_edit_cell",
     {
-      description: "Edit a single table cell's text by table, row, and column index. WHEN: need to update one cell's content and you know the table index. NOT: don't know the table index? use word_edit_cell_at instead.",
+      description: "WHEN: need to update one cell's content and you know the table index (default: 1). WHAT: sets the text of a specific cell by table index, row, and column. CONSTRAINT: tableIndex is 1-based; default=1 if only one table exists. For batch updates, use word_edit_cells.",
       inputSchema: {
-        tableIndex: z.number().int().min(1).optional().describe("Table index (1-based, default: 1)"),
+        tableIndex: z.number().int().min(1).optional().describe("Table index (1-based, default: 1). Use word_get_info to check table count."),
         row: z.number().int().min(1).describe("Row number (1-based)"),
         column: z.number().int().min(1).describe("Column number (1-based)"),
         text: z.string().max(100000).describe("New cell text"),

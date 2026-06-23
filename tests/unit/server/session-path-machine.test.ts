@@ -120,16 +120,16 @@ describe("SessionPathMachine", () => {
     })
   })
 
-  describe("setOnLog", () => {
+  describe("setLogger", () => {
     it("calls log handler on state transitions", () => {
       const logFn = vi.fn()
-      machine.setOnLog(logFn)
+      machine.setLogger({ info: logFn } as any)
       machine.acquireStreamLock("word_stream_start")
-      expect(logFn).toHaveBeenCalledWith("info", expect.stringContaining("Stream lock acquired"))
+      expect(logFn).toHaveBeenCalledWith(expect.stringContaining("Stream lock acquired"))
     })
 
-    it("default setOnLog(null) does not crash", () => {
-      machine.setOnLog(null as any)
+    it("default setLogger(null) does not crash", () => {
+      machine.setLogger(null as any)
       machine.acquireStreamLock("word_stream_start")
       expect(machine.currentPath).toBe("streaming")
     })

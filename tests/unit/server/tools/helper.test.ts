@@ -12,8 +12,7 @@ function setupFull() {
     markDirtyIfNeeded: vi.fn(),
     schedulePositionRefresh: vi.fn(),
     recoverSession: vi.fn().mockResolvedValue(undefined),
-    captureStatusSuffix: vi.fn().mockReturnValue(""),
-    captureContextSuffix: vi.fn().mockReturnValue(""),
+    buildToolMeta: vi.fn().mockReturnValue(null),
   } as any
   const session = {} as any
   const positionMap = {} as any
@@ -52,19 +51,29 @@ describe("mcpCall", () => {
       expect(director.markHealthy).toHaveBeenCalled()
       expect(director.markDirtyIfNeeded).toHaveBeenCalledWith("test_tool")
       expect(director.schedulePositionRefresh).toHaveBeenCalled()
-      expect(director.captureStatusSuffix).toHaveBeenCalled()
-      expect(result).toEqual({ content: [{ type: "text", text: "operation succeeded" }] })
+      expect(director.buildToolMeta).toHaveBeenCalled()
+      expect(result.content[0].text).toBe("operation succeeded")
+      expect(result.content.length).toBe(1)  // no meta → single content
     })
 
-    it("appends status suffix to result", async () => {
+    it("includes metadata as second content when available", async () => {
       const { security, context, director } = setupFull()
-      director.captureStatusSuffix = vi.fn().mockReturnValue("\n---\ndoc: \"test.docx\"")
+      director.buildToolMeta = vi.fn().mockReturnValue({
+        struct: { v: 3, p: 14, h: 2, t: 0 },
+        doc: { name: "report.docx", state: "named" },
+      })
       const handler = vi.fn().mockResolvedValue("ok")
 
       const wrapped = mcpCall(security, context, "test_tool", handler)
       const result = await wrapped({})
 
-      expect(result.content[0].text).toBe("ok\n---\ndoc: \"test.docx\"")
+      expect(result.content[0].text).toBe("ok")
+      expect(result.content[1].type).toBe("text")
+      expect(JSON.parse(result.content[1].text)).toEqual({
+        struct: { v: 3, p: 14, h: 2, t: 0 },
+        doc: { name: "report.docx", state: "named" },
+      })
+      expect(result.content[1].annotations).toEqual({ audience: ["assistant"] })
     })
   })
 
@@ -72,14 +81,15 @@ describe("mcpCall", () => {
     it("returns error content when precheck fails", async () => {
       const { security, context, director } = setupFull()
       director.precheck = vi.fn().mockResolvedValue({ ok: false, error: "[STREAMING] Cannot do that" })
-      director.captureStatusSuffix = vi.fn().mockReturnValue(" [suffix]")
 
       const handler = vi.fn()
       const wrapped = mcpCall(security, context, "test_tool", handler)
       const result = await wrapped({})
 
       expect(handler).not.toHaveBeenCalled()
-      expect(result.content[0].text).toBe("[STREAMING] Cannot do that [suffix]")
+      expect(result.content[0].text).toBe("[STREAMING] Cannot do that")
+      expect(result.content.length).toBe(2) // error text + recovery meta
+      expect(result.content[1].annotations).toEqual({ audience: ["assistant"] })
     })
   })
 

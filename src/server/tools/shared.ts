@@ -6,6 +6,7 @@ import { WordMcpError, WordEngineTimeoutError } from "../../security/errors.js"
 import type { ServerContext } from "../server-context.js"
 import { mcpCall } from "./helper.js"
 import type { Precondition } from "../session-director.js"
+import type { ToolResponse } from "../tool-result.js"
 
 export const ColorSchema = z.enum([
   "auto", "black", "blue", "turquoise", "bright_green", "pink", "red",
@@ -33,14 +34,14 @@ export function createRegTool(server: McpServer, security: SecurityManager, cont
   return function regTool(
     name: string,
     config: { description?: string; inputSchema?: any },
-    handler: (args: any) => Promise<string>,
+    handler: (args: any) => Promise<string | ToolResponse>,
     options?: RegToolOptions,
   ): void {
     server.registerTool(name, config, mcpCall(security, context, name, handler, options))
   }
 }
 
-const READ_ONLY_TOOLS = new Set([
+export const READ_ONLY_TOOLS = new Set([
   "word_get_text", "word_get_paragraph", "word_get_structure", "word_get_info",
   "word_get_status", "word_get_table_data", "word_get_comments", "word_get_bookmarks",
   "word_get_lists", "word_get_sections", "word_get_cursor_info", "word_locate",

@@ -5,6 +5,8 @@ import type { WordApplicationManager } from "../word/application.js"
 import { CircuitBreaker } from "../word/circuit-breaker.js"
 import { SessionPathMachine, type SessionPath } from "./session-path-machine.js"
 import { isReadOnlyTool } from "./tools/shared.js"
+import type { ILogger } from "../logger.js"
+import type { SystemMeta } from "./tool-result.js"
 
 export type Precondition = "DOC" | "NO_DOC"
 
@@ -24,7 +26,7 @@ export class SessionDirector implements IStreamLock {
   private _session: IWordSession | null
   private _positionMap: PositionMap | null
   private _appManager: WordApplicationManager | undefined
-  private _onLog: ((level: string, message: string) => void) | null = null
+  private _logger: ILogger | null = null
   private _circuitBreaker: CircuitBreaker
   private _watchdogTimer: ReturnType<typeof setInterval> | null = null
 
@@ -36,13 +38,16 @@ export class SessionDirector implements IStreamLock {
     this._circuitBreaker = new CircuitBreaker()
   }
 
-  setOnLog(handler: (level: string, message: string) => void): void {
-    this._onLog = handler
-    this._pathMachine.setOnLog(handler)
+  setLogger(logger: ILogger): void {
+    this._logger = logger
+    this._pathMachine.setLogger(logger)
   }
 
   private _log(level: string, message: string): void {
-    this._onLog?.(level, message)
+    if (level === "error") this._logger?.error(message)
+    else if (level === "warn") this._logger?.warn(message)
+    else if (level === "debug") this._logger?.debug(message)
+    else this._logger?.info(message)
   }
 
   get isStreamingActive(): boolean {
@@ -151,7 +156,7 @@ export class SessionDirector implements IStreamLock {
         try {
           await session.recover()
           this._circuitBreaker.forceReset()
-        } catch (e) { console.warn("[SessionDirector] precheck recovery failed:", e) }
+        } catch (e) { this._logger?.warn({ err: e }, "precheck recovery failed") }
       }
     }
 
@@ -162,7 +167,7 @@ export class SessionDirector implements IStreamLock {
         this._circuitBreaker.forceReset()
       } else {
         const breakerErr = err as Error
-        return { ok: false, error: breakerErr.message + (this.captureStatusSuffix() ?? "") }
+        return { ok: false, error: breakerErr.message }
       }
     }
 
@@ -191,10 +196,10 @@ export class SessionDirector implements IStreamLock {
           if (doc && fullName) {
             try {
               this._appManager?.adoptDocument(fullName, doc)
-            } catch { console.warn("[SessionDirector] adoptDocument failed during precheck") }
+            } catch { this._logger?.warn("adoptDocument failed during precheck") }
           }
         }
-      } catch { console.warn("[SessionDirector] activeDoc resolution failed during precheck") }
+      } catch { this._logger?.warn("activeDoc resolution failed during precheck") }
       if (!session.activeDoc) {
         return "[NO_DOCUMENT] No document is currently open.\n>> Recovery: Use word_stream_start({title:'...'}) to create a new document, or word_document({path:'...'}) to open an existing one."
       }
@@ -205,32 +210,39 @@ export class SessionDirector implements IStreamLock {
     return null
   }
 
-  captureStatusSuffix(): string {
-    const session = this._session
-    if (!session) return ""
+  buildToolMeta(): SystemMeta | null {
     try {
-      const pathLabel = this._pathMachine.currentPath === "streaming" ? " [stream active]" : this._pathMachine.currentPath === "editing" ? " [edit mode]" : ""
-      if (!session.activeDoc) return `\n---\ndoc: none${pathLabel}`
-      const path = session.activeDocPath
-      if (!path) return `\n---\ndoc: untitled${pathLabel}`
-      const name = path.split(/[\\/]/).pop() ?? "?"
-      return `\n---\ndoc: "${name}"${pathLabel}`
-    } catch {
-      return ""
-    }
-  }
+      const session = this._session
+      if (!session) return null
 
-  captureContextSuffix(): string {
-    const pm = this._positionMap
-    if (!pm) return ""
-    try {
-      const v = pm.docVersion
-      const p = pm.cachedParaCount
-      const h = pm.cachedHeadingCount
-      const t = pm.cachedTableCount
-      return `\n---\nstruct: v=${v} p=${p} h=${h} t=${t}`
+      // struct
+      let struct: SystemMeta["struct"] | undefined
+      const pm = this._positionMap
+      if (pm) {
+        struct = {
+          v: pm.docVersion,
+          p: pm.cachedParaCount,
+          h: pm.cachedHeadingCount,
+          t: pm.cachedTableCount,
+        }
+      }
+
+      // doc
+      let doc: SystemMeta["doc"] | undefined
+      if (!session.activeDoc) {
+        doc = { name: null, state: "none" }
+      } else {
+        const path = session.activeDocPath
+        doc = path
+          ? { name: path.split(/[\\/]/).pop() ?? "?", state: "named" }
+          : { name: null, state: "untitled" }
+      }
+
+      if (!doc) return null
+      const result: SystemMeta = { struct, doc }
+      return result
     } catch {
-      return ""
+      return null
     }
   }
 

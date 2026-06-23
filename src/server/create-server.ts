@@ -25,11 +25,13 @@ import { registerSemanticTools } from "./tools/semantic.js"
 import { registerBatchTools } from "./tools/batch.js"
 import { registerWhereAmITool } from "./tools/whereami.js"
 import { registerDocumentStructureResource } from "./resources/document-structure-resource.js"
+import { registerDiagnosticResource } from "./resources/diagnostic-resource.js"
 
 import { StreamingMarkdownWriter } from "../word/word-stream-writer.js"
 import { registerStreamTools } from "./tools/stream.js"
 import { registerReportPrompts } from "./prompts/report-prompts.js"
 import { registerStateMachinePrompt } from "./prompts/state-machine.js"
+import { createRootLogger, createModuleLogger } from "../logger.js"
 
 
 export interface CreateServerOptions {
@@ -38,27 +40,21 @@ export interface CreateServerOptions {
   logPrefix?: string
 }
 
-function createLogger(prefix: string) {
-  return (...args: unknown[]) => {
-    console.error(`[${prefix}]`, ...args)
-  }
-}
-
 export async function createServer(options: CreateServerOptions): Promise<void> {
-  const logPrefix = options.logPrefix ?? "word-mcp"
-  const log = createLogger(logPrefix)
-  const errorTag = logPrefix === "word-mcp" ? "word-mcp" : `word-mcp/${logPrefix}`
+  const rootLogger = createRootLogger()
+  const log = createModuleLogger(rootLogger, "server")
 
-  log("Starting Word MCP Server...")
+  log.info("Starting Word MCP Server...")
 
   const heartbeat = options.enableHeartbeat
-    ? setInterval(() => { console.error("[heartbeat] alive") }, 10_000)
+    ? setInterval(() => { log.debug("heartbeat alive") }, 10_000)
     : null
 
+  const sessionLogger = createModuleLogger(rootLogger, "session")
+  const directorLogger = createModuleLogger(rootLogger, "director")
+
   const session = new WordSession()
-  session.setOnLog((level, message) => {
-    log(`[session/${level}] ${message}`)
-  })
+  session.setLogger(sessionLogger)
   const appManager = new WordApplicationManager(session)
   const positionMap = new PositionMap(session)
   const docOps = new WordDocument(session, positionMap)
@@ -68,17 +64,15 @@ export async function createServer(options: CreateServerOptions): Promise<void> 
   const cursor = new WordCursor(session)
   const security = new SecurityManager()
   const director = new SessionDirector(session, positionMap, appManager)
-  director.setOnLog((level, message) => {
-    log(`[director/${level}] ${message}`)
-  })
+  director.setLogger(directorLogger)
   director.startWatchdog()
-  const context: ServerContext = { session, positionMap, director }
+  const context: ServerContext = { session, positionMap, director, logger: rootLogger }
   const streamWriter = new StreamingMarkdownWriter(
     session, contentWriter, appManager, formatter, director,
   )
 
   const cleanup = async () => {
-    log("Shutting down...")
+    log.info("Shutting down...")
     if (heartbeat) clearInterval(heartbeat)
     try { await appManager.quit() } catch { /* ignore */ }
     process.exit(0)
@@ -86,10 +80,10 @@ export async function createServer(options: CreateServerOptions): Promise<void> 
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
   process.on("unhandledRejection", (reason) => {
-    log("Unhandled rejection:", reason)
+    log.error("Unhandled rejection:", reason)
   })
   process.on("uncaughtException", (err) => {
-    log("Uncaught exception:", err)
+    log.error({ err }, "Uncaught exception")
     process.exit(1)
   })
 
@@ -115,9 +109,10 @@ export async function createServer(options: CreateServerOptions): Promise<void> 
   registerStreamTools(server, context, streamWriter, security)
   registerWhereAmITool(server, context, positionMap, security)
   registerDocumentStructureResource(server, context, docOps, positionMap)
+  registerDiagnosticResource(server, context)
 
   const transport = new StdioServerTransport()
   await server.connect(transport)
 
-  log("Word MCP Server connected and ready")
+  log.info("Word MCP Server connected and ready")
 }

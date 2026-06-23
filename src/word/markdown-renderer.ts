@@ -10,6 +10,7 @@ export interface RenderContext {
   getSelection(): ISelectionProxy
   requireDoc(): IDocumentProxy
   goToEnd(): void
+  withScreenOff<T>(fn: () => Promise<T>): Promise<T>
 }
 
 export class MarkdownRenderer {
@@ -174,37 +175,51 @@ export class MarkdownRenderer {
       const range = this.com.getSelection().getRange().raw
       const tables = doc.getTables()
       const table = tables.add(range, rows, cols)
-      const TIME_BUDGET = 50
-      let cellBatchStart = Date.now()
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          try {
-            const text = sanitizeText(block.rows[r][c] ?? "")
-            ;((table.Cell as (r: number, c: number) => { Range: { Text: string } })(r + 1, c + 1).Range.Text as string) = text
-          } catch { /* cell may fail individually */ }
-          if (Date.now() - cellBatchStart >= TIME_BUDGET) {
-            await new Promise(resolve => setImmediate(resolve))
-            cellBatchStart = Date.now()
+      // Wrap all cell-fill + styling inside withScreenOff to avoid per-call UI repaints
+      await this.com.withScreenOff(async () => {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            try {
+              const text = sanitizeText(block.rows[r][c] ?? "")
+              ;((table.Cell as (r: number, c: number) => { Range: { Text: string } })(r + 1, c + 1).Range.Text as string) = text
+            } catch { /* cell may fail individually */ }
           }
         }
-      }
-      WordFormatter.applyDefaultBorders(table)
-      try { ;((table.Rows as Record<string, unknown>).Alignment as number) = 1 } catch { /* ignore */ }
+        WordFormatter.applyDefaultBorders(table)
+        try { ;((table.Rows as Record<string, unknown>).Alignment as number) = 1 } catch { /* ignore */ }
+        try {
+          const headerRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
+          ;((headerRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
+          ;(headerRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xD9E2F3
+        } catch { /* ignore */ }
+      })
+      // AutoFitBehavior after screen re-enabled — single repaint only
       try { ;(table.AutoFitBehavior as (b: number) => void)(1) } catch { /* ignore */ }
+      // Move cursor reliably past the table with explicit wdParagraph unit (4)
       try {
-        const headerRow = (table.Rows as { Item: (i: number) => Record<string, unknown> }).Item(1)
-        ;((headerRow.Range as Record<string, unknown>).Font as Record<string, unknown>).Bold = true
-        ;(headerRow.Shading as Record<string, unknown>).BackgroundPatternColor = 0xD9E2F3
-      } catch { /* ignore */ }
-      // Move cursor reliably past the table (endKey(wdStory) is unreliable inside tables)
-      try {
-        const tableEnd = (table.Range as Record<string, unknown>).End as number
-        const docEnd = doc.getContent().getEnd()
-        const targetPos = Math.min(tableEnd, docEnd)
-        doc.getRange(targetPos, targetPos).select()
-        this.com.getSelection().collapse(0)
+        const rawTableRange = table.Range as Record<string, unknown>
+        const nextRange = (rawTableRange.Next as (unit?: number) => Record<string, unknown> | undefined)(4)
+        if (nextRange) {
+          const nextStart = nextRange.Start as number
+          if (typeof nextStart === "number") {
+            doc.getRange(nextStart, nextStart).select()
+            this.com.getSelection().collapse(0)
+          } else {
+            throw new Error("no next range start")
+          }
+        } else {
+          throw new Error("no content after table")
+        }
       } catch {
-        try { this.com.goToEnd() } catch { /* ignore */ }
+        // Table is at end of document — InsertParagraph creates a new paragraph outside the table
+        try {
+          const contentEnd = doc.getContent().getEnd()
+          const insertAt = doc.getRange(contentEnd, contentEnd).raw
+          ;(insertAt.InsertParagraph as () => void)()
+          const newEnd = doc.getContent().getEnd()
+          doc.getRange(newEnd, newEnd).select()
+          this.com.getSelection().collapse(0)
+        } catch { /* ignore */ }
       }
       if (bi < totalBlocks - 1) { this.com.getSelection().typeParagraph() }
       return block.rows.reduce((s, r) => s + r.reduce((a, t) => a + t.length, 0), 0)

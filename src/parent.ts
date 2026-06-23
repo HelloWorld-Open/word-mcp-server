@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
+import { randomUUID } from "node:crypto"
+import pino from "pino"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -9,9 +11,10 @@ const CHILD_SCRIPT = resolve(__dirname, "child.js")
 const WATCHDOG_TIMEOUT_MS = parseInt(process.env.WATCHDOG_TIMEOUT_MS ?? "30000", 10)
 const WATCHDOG_INTERVAL_MS = parseInt(process.env.WATCHDOG_INTERVAL_MS ?? "5000", 10)
 
-function log(...args: unknown[]) {
-  console.error("[parent]", ...args)
-}
+const logger = pino({
+  name: "word-mcp/parent",
+  level: process.env.LOG_LEVEL ?? "info",
+})
 
 class Watchdog {
   private child: ReturnType<typeof spawn> | null = null
@@ -31,12 +34,14 @@ class Watchdog {
     if (this.restarting) return
     this.generation++
     const myGeneration = this.generation
-    log(`Spawning child (generation ${myGeneration}): ${CHILD_SCRIPT}`)
+    const childTraceId = randomUUID()
+    logger.info({ childTraceId, generation: myGeneration }, "Spawning child")
 
     this.lastChildOutput = Date.now()
     this.child = spawn("node", [CHILD_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: false,
+      env: { ...process.env, CHILD_TRACE_ID: childTraceId },
     })
 
     const child = this.child
@@ -67,19 +72,19 @@ class Watchdog {
 
     // 子进程退出处理
     child.on("exit", (code, signal) => {
-      log(`Child exited (code: ${code}, signal: ${signal})`)
+      logger.info({ code, signal, generation: myGeneration }, "Child exited")
       if (this.generation !== myGeneration) return
       if (!this.shutdown) {
-        log("Restarting child after unexpected exit...")
+        logger.warn("Restarting child after unexpected exit...")
         this.spawnChild()
       }
     })
 
     child.on("error", (err) => {
-      log(`Child error: ${err.message}`)
+      logger.error({ err: err.message }, "Child error")
     })
 
-    log("Child process spawned")
+    logger.info("Child process spawned")
   }
 
   private startWatchdog(): void {
@@ -89,7 +94,7 @@ class Watchdog {
 
       const idle = Date.now() - this.lastChildOutput
       if (idle > WATCHDOG_TIMEOUT_MS) {
-        log(`Watchdog: no child output for ${idle}ms, killing and restarting...`)
+        logger.warn({ idleMs: idle }, "Watchdog: no child output, killing and restarting...")
         this.restarting = true
         this.child.kill("SIGTERM")
         // 等待进程退出
@@ -104,7 +109,7 @@ class Watchdog {
   private setupSignalHandlers(): void {
     const cleanup = () => {
       this.shutdown = true
-      log("Shutting down parent...")
+      logger.info("Shutting down parent...")
       if (this.child && !this.child.killed) {
         this.child.kill("SIGTERM")
       }
@@ -114,7 +119,7 @@ class Watchdog {
     process.on("SIGINT", cleanup)
     process.on("SIGTERM", cleanup)
     process.on("unhandledRejection", (reason) => {
-      log("Unhandled rejection:", reason)
+      logger.error({ err: reason }, "Unhandled rejection")
     })
   }
 }

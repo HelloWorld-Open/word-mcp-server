@@ -70,14 +70,24 @@ export class ContextSanitizer implements ICursorContext {
         if (sel.getInformation(ContextSanitizer.WD_WITHIN_TABLE)) {
           const table = (sel.getTables() as { Item: (i: number) => Record<string, unknown> }).Item(1)
           // Use Document.Range to position cursor AFTER the table.
-          // collapse(wdCollapseEnd) on table.Range still leaves cursor within table structure,
-          // which causes subsequent tables.add() to create a nested table → COM hang.
-          const tableEnd = (table.Range as Record<string, unknown>).End as number
-          const tableDoc = this.session.getDocProxy()
-          const docEnd = tableDoc.getContent().getEnd()
-          const targetPos = Math.min(tableEnd, docEnd)
-          tableDoc.getRange(targetPos, targetPos).select()
-          this.getSelection().collapse(0)
+          // Range.Next() guarantees the cursor lands outside table structure.
+          // Fallback: InsertParagraph at document end creates new paragraph outside table.
+          const rawTableRange = table.Range as Record<string, unknown>
+          const nextRange = (rawTableRange.Next as () => Record<string, unknown> | undefined)()
+          if (nextRange) {
+            const nextStart = nextRange.Start as number
+            if (typeof nextStart === "number") {
+              this.session.getDocProxy().getRange(nextStart, nextStart).select()
+              this.getSelection().collapse(0)
+            } else {
+              throw new Error("no next range start")
+            }
+          } else {
+            throw new Error("no content after table")
+          }
+          this.cachedStart = -1
+          this.cachedEnd = -1
+          this.collapseReady = false
         }
       } catch { /* table check may fail */ }
 
@@ -90,7 +100,7 @@ export class ContextSanitizer implements ICursorContext {
           this.getSelection().collapse(0)
         }
       } catch { /* shape check may fail */ }
-    } catch (e) { console.warn("[ContextSanitizer] ensureMainBody failed:", e) }
+    } catch (e) { this.session.logger?.warn({ err: e }, "ensureMainBody failed") }
   }
 
   markInBody(): void {
@@ -108,7 +118,7 @@ export class ContextSanitizer implements ICursorContext {
       const doc = this.session.getDocProxy()
       const end = doc.getContent().getEnd()
       doc.getRange(end, end).select()
-    } catch (e) { console.warn("[ContextSanitizer] goToEnd failed:", e) }
+    } catch (e) { this.session.logger?.warn({ err: e }, "goToEnd failed") }
   }
 
   reset(): void {

@@ -2,7 +2,7 @@
 
 # Word MCP Server — Tool Reference
 
-> 80 tools across 12 modules.
+> 81 tools across 13 modules.
 
 ---
 
@@ -145,6 +145,18 @@
 | Tool | Description |
 |------|-------------|
 | `word_replace_variables` | Replace {{placeholder}} variables in document with provided values |
+
+### Batch Operations
+
+| Tool | Description |
+|------|-------------|
+| `word_batch_ops` | Execute multiple operations in a single call for performance |
+
+### Diagnostics
+
+| Tool | Description |
+|------|-------------|
+| `word_where_am_i` | Get current cursor position context (heading, section, table, etc.) |
 
 ---
 

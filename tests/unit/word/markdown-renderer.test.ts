@@ -53,6 +53,7 @@ function createRenderContext(
       getSelection: () => selProxy,
       requireDoc: () => docProxy,
       goToEnd,
+      withScreenOff: async <T>(fn: () => Promise<T>) => fn(),
     },
     sel: selProxy,
     doc: docProxy,
@@ -386,6 +387,7 @@ describe("MarkdownRenderer.renderBlock — consecutive tables", () => {
       getSelection: () => selProxy,
       requireDoc: () => docProxy,
       goToEnd,
+      withScreenOff: async <T>(fn: () => Promise<T>) => fn(),
     }
     return { ctx, sel: selProxy, doc: docProxy, tableAddMock, selectMock }
   }

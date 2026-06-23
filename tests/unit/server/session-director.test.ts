@@ -21,8 +21,16 @@ function createMockSession(overrides: Record<string, any> = {}) {
   }
 }
 
-function createMockPositionMap() {
-  return { markDirty: vi.fn(), scheduleRefresh: vi.fn() }
+function createMockPositionMap(overrides?: Record<string, unknown>) {
+  return {
+    markDirty: vi.fn(),
+    scheduleRefresh: vi.fn(),
+    docVersion: 1,
+    cachedParaCount: 1,
+    cachedHeadingCount: 0,
+    cachedTableCount: 0,
+    ...overrides,
+  }
 }
 
 function createMockAppManager() {
@@ -69,7 +77,7 @@ describe("SessionDirector", () => {
   describe("setOnLog", () => {
     it("sets log handler without error", () => {
       const d = new SessionDirector(mockSession)
-      d.setOnLog(vi.fn())
+      d.setLogger(vi.fn() as any)
     })
   })
 
@@ -283,22 +291,24 @@ describe("SessionDirector", () => {
     })
   })
 
-  describe("captureStatusSuffix", () => {
-    it("returns empty string when session is null", () => {
+  describe("buildToolMeta", () => {
+    it("returns null when session is null", () => {
       const d = new SessionDirector(null)
-      expect(d.captureStatusSuffix()).toBe("")
+      expect(d.buildToolMeta()).toBeNull()
     })
 
-    it("returns doc: none when no activeDoc", () => {
+    it("returns doc state none when no activeDoc", () => {
       const d = new SessionDirector(createMockSession({ activeDoc: null as any }))
-      const suffix = d.captureStatusSuffix()
-      expect(suffix).toContain("doc: none")
+      const meta = d.buildToolMeta()
+      expect(meta).not.toBeNull()
+      expect(meta!.doc).toEqual({ name: null, state: "none" })
     })
 
-    it("returns doc: untitled when no activeDocPath", () => {
+    it("returns doc state untitled when no activeDocPath", () => {
       const d = new SessionDirector(createMockSession({ activeDoc: { Name: "Untitled" } as any, activeDocPath: null }))
-      const suffix = d.captureStatusSuffix()
-      expect(suffix).toContain("doc: untitled")
+      const meta = d.buildToolMeta()
+      expect(meta).not.toBeNull()
+      expect(meta!.doc).toEqual({ name: null, state: "untitled" })
     })
 
     it("returns filename from activeDocPath", () => {
@@ -306,26 +316,21 @@ describe("SessionDirector", () => {
         activeDoc: { Name: "report.docx" },
         activeDocPath: "C:\\docs\\report.docx",
       })
-      const d = new SessionDirector(sessionWithPath)
-      const suffix = d.captureStatusSuffix()
-      expect(suffix).toContain('doc: "report.docx"')
+      const d = new SessionDirector(sessionWithPath, createMockPositionMap())
+      const meta = d.buildToolMeta()
+      expect(meta).not.toBeNull()
+      expect(meta!.doc).toEqual({ name: "report.docx", state: "named" })
     })
 
-    it("includes [stream active] when streaming", () => {
-      const d = new SessionDirector(mockSession)
-      d.acquireStreamLock("word_stream_start")
-      const suffix = d.captureStatusSuffix()
-      expect(suffix).toContain("[stream active]")
+    it("returns struct when positionMap is available", () => {
+      const posMap = createMockPositionMap({ docVersion: 5, cachedParaCount: 20, cachedHeadingCount: 3, cachedTableCount: 1 })
+      const d = new SessionDirector(mockSession, posMap)
+      const meta = d.buildToolMeta()
+      expect(meta).not.toBeNull()
+      expect(meta!.struct).toEqual({ v: 5, p: 20, h: 3, t: 1 })
     })
 
-    it("includes [edit mode] when editing", () => {
-      const d = new SessionDirector(mockSession)
-      d.enterEditMode()
-      const suffix = d.captureStatusSuffix()
-      expect(suffix).toContain("[edit mode]")
-    })
-
-    it("gracefully handles errors", () => {
+    it("gracefully handles errors and returns null", () => {
       const base = createMockSession()
       delete (base as any).activeDoc
       delete (base as any).activeDocPath
@@ -333,7 +338,7 @@ describe("SessionDirector", () => {
         get: () => { throw new Error("COM error") },
       })
       const d = new SessionDirector(throwingSession)
-      expect(d.captureStatusSuffix()).toBe("")
+      expect(d.buildToolMeta()).toBeNull()
     })
   })
 

@@ -118,13 +118,6 @@ export class StreamingMarkdownWriter extends WordBase {
         })
       }
 
-      // 应用默认正文样式 + 用户自定义样式配置
-      try {
-        await this.formatting.modifyStyle("Normal", {
-          paragraph: { spaceAfter: 6, firstLineIndent: 0.74 },
-        })
-      } catch { /* ignore */ }
-
       if (params.baseStyleProfile) {
         for (const [styleName, profile] of Object.entries(params.baseStyleProfile)) {
           try {

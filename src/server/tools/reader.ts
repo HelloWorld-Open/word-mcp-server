@@ -1,9 +1,14 @@
 import { z } from "zod"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { WordDocument } from "../../word/document.js"
+import { WordDocument, type TextSummary } from "../../word/document.js"
 import { SecurityManager } from "../../security/policy.js"
 import type { ServerContext } from "../server-context.js"
 import { createRegTool } from "./shared.js"
+import type { ToolResponse } from "../tool-result.js"
+
+function isTextSummary(v: string | TextSummary): v is TextSummary {
+  return typeof v === "object" && v !== null && "hasMore" in v
+}
 
 export function registerReaderTools(
   server: McpServer,
@@ -14,19 +19,34 @@ export function registerReaderTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_get_text",
     {
-      description: "Get the full text content of the current document. WHEN: need to read what's written, verify content, or analyze text. NOT: need structure/headings? use word_get_structure.",
+      description: "WHEN: need to read the entire document content to understand what's written. WHAT: returns the full plain text of the current document. CONSTRAINT: read-only. For documents over 10,000 characters, a summary with pagination info is returned instead. For heading structure, use word_get_structure.",
     },
-    async () => {
-      const text = await docOps.getFullText()
-      return text
+    async (): Promise<string | ToolResponse> => {
+      const result = await docOps.getFullText()
+      if (isTextSummary(result)) {
+        return {
+          text: `Document text (${result.totalChars} total chars — showing first ${result.returnedChars}):\n\n${result.text}`,
+          data: {
+            textSummary: {
+              totalChars: result.totalChars,
+              returnedChars: result.returnedChars,
+              paraCount: result.paraCount,
+              headingCount: result.headingCount,
+              hasMore: result.hasMore,
+              nextAction: result.nextAction,
+            },
+          },
+        }
+      }
+      return result
     },
   )
 
   regTool("word_get_paragraph",
     {
-      description: "Get text from a specific paragraph by index. WHEN: need to read a specific section. NOT: want all text? use word_get_text.",
+      description: "WHEN: need to read a specific paragraph's text when you know its index (e.g., from word_get_structure). WHAT: returns the text content of a single paragraph by 1-based index with preview truncation at 200 chars. CONSTRAINT: read-only. For full document content, use word_get_text.",
       inputSchema: {
-        index: z.number().int().positive().describe("Paragraph index (1-based). Use word_get_structure() to find heading paragraph indices."),
+        index: z.number().int().positive().describe("Paragraph index (1-based). Use word_get_structure() output like 'H1 ¶3 — Introduction' to find paragraph indices."),
       },
     },
     async ({ index }) => {
@@ -37,9 +57,9 @@ export function registerReaderTools(
 
   regTool("word_export_to_pdf",
     {
-      description: "Export the current document to PDF without changing the document. WHEN: need a PDF copy for sharing or preview. NOT: want to save document in another format? use word_save_as.",
+      description: "WHEN: need a PDF copy of the current document for sharing or preview without changing the original docx. WHAT: exports the current document to PDF at the specified path. CONSTRAINT: does NOT change the active document or its save state. For saving in other formats (RTF, TXT, HTML), use word_save_as.",
       inputSchema: {
-        path: z.string().min(1).max(4096).optional().describe("Output PDF path (default: same name as source document with .pdf extension)"),
+        path: z.string().min(1).max(4096).optional().describe("Output PDF path (default: same name as source document with .pdf extension). Required if document is untitled."),
       },
     },
     async ({ path }) => {
@@ -60,7 +80,7 @@ export function registerReaderTools(
 
   regTool("word_get_table_data",
     {
-      description: "Extract table content as structured data. WHEN: need to verify table content, read table data, or check table structure. NOT: want to edit a table? use word_edit_cells.",
+      description: "WHEN: need to read table content as structured data to verify or analyze it. WHAT: extracts all rows and columns of a table by index (1-based) with table count info. CONSTRAINT: read-only. For editing table content, use word_edit_cell or word_edit_cells.",
       inputSchema: {
         index: z.number().int().positive().default(1).describe("Table index (1-based). Use word_get_info to check table count."),
       },
@@ -80,7 +100,7 @@ export function registerReaderTools(
 
   regTool("word_get_comments",
     {
-      description: "List all comments in the document. WHEN: need to review existing comments. NOT: want to add a comment? use word_add_comment.",
+      description: "WHEN: need to review existing comments/feedback in the document. WHAT: lists all comments with index, author, and text preview. CONSTRAINT: read-only. For adding new comments, use word_add_comment.",
     },
     async () => {
       const comments = await docOps.getComments()
@@ -95,7 +115,7 @@ export function registerReaderTools(
 
   regTool("word_get_bookmarks",
     {
-      description: "List all bookmarks in the document. WHEN: need to see available bookmarks for navigation. NOT: want to add a bookmark? use word_add_bookmark.",
+      description: "WHEN: need to see available bookmarks for navigation or hyperlink targets. WHAT: lists all bookmarks with index and name. CONSTRAINT: read-only. For adding new bookmarks, use word_add_bookmark.",
     },
     async () => {
       const bookmarks = await docOps.getBookmarks()
@@ -110,7 +130,7 @@ export function registerReaderTools(
 
   regTool("word_get_lists",
     {
-      description: "List all bullet and numbered lists in the document with hierarchy. WHEN: need to review list structure or verify list content. NOT: want raw text? use word_get_text.",
+      description: "WHEN: need to review bullet/numbered list structure or verify list content. WHAT: returns all lists with hierarchy (indentation level), item text, and item prefix (bullet/number). CONSTRAINT: read-only. For creating new lists, use word_insert_list.",
     },
     async () => {
       const result = await docOps.getLists()
@@ -133,7 +153,7 @@ export function registerReaderTools(
 
   regTool("word_get_sections",
     {
-      description: "List all sections with page setup info (orientation, columns, page size). WHEN: need to understand document layout or section boundaries. NOT: need heading structure? use word_get_structure.",
+      description: "WHEN: need to understand document layout boundaries or section formatting. WHAT: returns all sections with orientation, column count, and page dimensions. CONSTRAINT: read-only. For changing section layout, use word_set_page_setup or word_insert_section_break.",
     },
     async () => {
       const result = await docOps.getSections()

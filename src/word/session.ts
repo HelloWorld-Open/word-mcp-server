@@ -8,6 +8,7 @@ import type { IDocumentProxy, ISelectionProxy, IRangeProxy } from "./com-proxy/t
 import { DocumentProxy } from "./com-proxy/document-proxy.js"
 import { SelectionProxy } from "./com-proxy/selection-proxy.js"
 import { RangeProxy } from "./com-proxy/range-proxy.js"
+import type { ILogger } from "../logger.js"
 
 const require = createRequire(import.meta.url)
 
@@ -19,13 +20,14 @@ export interface IWordSession {
   readonly application: Record<string, unknown>
   readonly activeDoc: Record<string, unknown> | null
   readonly activeDocPath: string | null
+  readonly logger: ILogger | null
   setActiveDoc(doc: Record<string, unknown> | null): void
   setActiveDocPath(path: string | null): void
   ensureAlive(): void
   isAlive(): boolean
   start(): void
   quit(): void
-  setOnLog(handler: (level: string, message: string) => void): void
+  setLogger(logger: ILogger): void
   setScreenUpdating(on: boolean): void
   withScreenOff<T>(fn: () => Promise<T>): Promise<T>
   healthCheck(): boolean
@@ -63,7 +65,7 @@ export class WordSession implements IWordSession {
   private word: Record<string, unknown> | null = null
   private _activeDoc: Record<string, unknown> | null = null
   private _activeDocPath: string | null = null
-  private onLog: ((level: string, message: string) => void) | null = null
+  private _logger: ILogger | null = null
   private _winaxMod: WinaxModule | null = null
   private _unhealthy = false
   private _recovering = false
@@ -120,13 +122,19 @@ export class WordSession implements IWordSession {
     return p
   }
 
-  setOnLog(handler: (level: string, message: string) => void): void {
-    this.onLog = handler
+  get logger(): ILogger | null {
+    return this._logger
+  }
+
+  setLogger(logger: ILogger): void {
+    this._logger = logger
   }
 
   log(level: string, msg: string): void {
-    this.onLog?.(level, msg)
-    if (level === "error") console.error(msg)
+    if (level === "error") this._logger?.error(msg)
+    else if (level === "warn") this._logger?.warn(msg)
+    else if (level === "debug") this._logger?.debug(msg)
+    else this._logger?.info(msg)
   }
 
   private _cleanupRecoveryFiles(): void {
@@ -150,18 +158,18 @@ export class WordSession implements IWordSession {
   start(): void {
     if (this.word) return
     this._cleanupRecoveryFiles()
-    this.onLog?.("info", "Creating Word.Application via winax")
+    this._logger?.info("Creating Word.Application via winax")
     const winaxMod = this.getWinax()
     const app = new winaxMod.Object("Word.Application") as Record<string, unknown>
     app.AutomationSecurity = 3
     app.DisplayAlerts = 0
     try { ;(app as any).ShowStartupDialog = false } catch { /* Word 2013+ only */ }
-    try { ;(app as any).Visible = true } catch (e) { this.onLog?.("warn", `Visible=true failed: ${e}`) }
+    try { ;(app as any).Visible = true } catch (e) { this._logger?.warn(`Visible=true failed: ${e}`) }
     this.word = app
     this.lockPrintView()
     this.monitor.start()
     this._unhealthy = false
-    this.onLog?.("info", "Word.Application created successfully")
+    this._logger?.info("Word.Application created successfully")
   }
 
   ensureAlive(): void {
@@ -232,7 +240,7 @@ export class WordSession implements IWordSession {
             const doc = docs.Item(1) as Record<string, unknown>
             const isSaved = (doc.Saved as boolean) ?? true
             if (!isSaved) {
-              this.onLog?.("warn", `Closing unsaved document: ${(doc.Name as string) ?? "unknown"}`)
+              this._logger?.warn(`Closing unsaved document: ${(doc.Name as string) ?? "unknown"}`)
             }
             ;(doc.Close as (s: boolean) => void)(false)
           } catch {
@@ -246,7 +254,7 @@ export class WordSession implements IWordSession {
       try {
         ;(this.word.Release as () => void)()
       } catch (e) {
-        this.onLog?.("warn", `Release failed (non-critical): ${e}`)
+        this._logger?.warn(`Release failed (non-critical): ${e}`)
       }
       this.word = null
       this._activeDoc = null
@@ -261,7 +269,7 @@ export class WordSession implements IWordSession {
     if (pid) {
       try {
         exec(`taskkill /PID ${pid} /F /T`, { timeout: 5000 })
-        this.onLog?.("info", `Killed WINWORD.EXE (PID: ${pid})`)
+        this._logger?.info(`Killed WINWORD.EXE (PID: ${pid})`)
       } catch {
         // process already dead — ignore
       }
@@ -277,7 +285,7 @@ export class WordSession implements IWordSession {
 
     // 进程级检查（无 COM 调用，避免死进程 COM 挂起 30-60s）
     if (!this.monitor.isAlive()) {
-      this.onLog?.("warn", "Process-level check: WINWORD.EXE not found — stale COM proxy")
+      this._logger?.warn("Process-level check: WINWORD.EXE not found — stale COM proxy")
       this.word = null
       this._unhealthy = true
       return false
@@ -291,7 +299,7 @@ export class WordSession implements IWordSession {
     if (this._recovering) return
     this._recovering = true
     this._busy = true
-    this.onLog?.("info", "Starting Word session recovery...")
+    this._logger?.info("Starting Word session recovery...")
 
     // 1. 先记录 PID，用于强制杀进程（必须在清空 word 之前获取）
     const pid = this.monitor.getPid()
@@ -316,9 +324,9 @@ export class WordSession implements IWordSession {
             else resolve()
           })
         })
-        this.onLog?.("info", `Killed WINWORD.EXE (PID: ${pid}) during recovery`)
+        this._logger?.info(`Killed WINWORD.EXE (PID: ${pid}) during recovery`)
       } catch {
-        this.onLog?.("warn", `taskkill for PID ${pid} failed (may already be dead)`)
+        this._logger?.warn(`taskkill for PID ${pid} failed (may already be dead)`)
       }
     }
 
@@ -336,20 +344,20 @@ export class WordSession implements IWordSession {
     this._recovering = false
     this.start()
     this.monitor.markAlive()
-    this.onLog?.("info", "Word session recovery complete")
+    this._logger?.info("Word session recovery complete")
   }
 
   comCall<T>(fn: () => T, signal?: AbortSignal): T {
     if (signal?.aborted) {
-      this.onLog?.("warn", "COM call blocked: signal aborted (previous timeout or recovery)")
+      this._logger?.warn("COM call blocked: signal aborted (previous timeout or recovery)")
       throw new TransientComError("Call aborted — previous operation timed out or session is recovering")
     }
     if (this._busy) {
-      this.onLog?.("warn", "COM call blocked: session marked busy (request stacking barrier)")
+      this._logger?.warn("COM call blocked: session marked busy (request stacking barrier)")
       throw new TransientComError("Session busy — a prior operation is still in progress or timed out")
     }
     if (this._recovering) {
-      this.onLog?.("warn", "COM call blocked: session is recovering")
+      this._logger?.warn("COM call blocked: session is recovering")
       throw new TransientComError("Session is recovering from a failure, try again shortly")
     }
     try {
@@ -359,7 +367,7 @@ export class WordSession implements IWordSession {
       return result
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.onLog?.("warn", `COM call failed: ${msg}`)
+      this._logger?.warn(`COM call failed: ${msg}`)
       if (!isTransientComError(err) || !this.monitor.isAlive()) {
         this._unhealthy = true
         throw new FatalComError(msg)
@@ -394,7 +402,7 @@ export class WordSession implements IWordSession {
       const view = win.View as Record<string, unknown> | undefined
       if (view) {
         view.Type = 3 // wdPrintView
-        this.onLog?.("debug", "View locked to Print Layout")
+        this._logger?.debug("View locked to Print Layout")
       }
     } catch { /* ActiveWindow may not exist before a document is opened */ }
   }

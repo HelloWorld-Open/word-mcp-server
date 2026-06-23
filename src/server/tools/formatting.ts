@@ -18,18 +18,18 @@ export function registerFormattingTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_set_font",
     {
-      description: "Set font properties. WHEN: after selecting text, or to set forward-typing font. NOT: want to format only part of document? select first.",
+      description: "WHEN: need to change text appearance (font, size, bold, color, etc.) on selected text or set forward-typing style. WHAT: applies font formatting to current selection, or sets the default for subsequently typed text if nothing is selected. CONSTRAINT: must select text first for retroactive formatting; without selection only affects NEW text after cursor.",
       inputSchema: {
-        name: z.string().max(100).optional().describe("Font name (e.g. 'Arial', 'SimSun')"),
-        size: z.number().min(1).max(1638).optional().describe("Font size in points"),
-        bold: z.boolean().optional().describe("Bold"),
-        italic: z.boolean().optional().describe("Italic"),
+        name: z.string().max(100).optional().describe("Font name (e.g. 'Arial', 'SimSun', 'Times New Roman', 'Calibri')"),
+        size: z.number().min(1).max(1638).optional().describe("Font size in points (e.g. 12 for body text, 16 for headings)"),
+        bold: z.boolean().optional().describe("Bold formatting"),
+        italic: z.boolean().optional().describe("Italic formatting"),
         underline: z.enum(["none", "single", "double", "wavy"]).optional().describe("Underline style"),
-        color: ColorSchema.optional().describe("Font color"),
+        color: ColorSchema.optional().describe("Font color (enumerated Word color)"),
         strikethrough: z.boolean().optional().describe("Strikethrough"),
-        highlightColor: ColorSchema.optional().describe("Highlight color"),
-        superscript: z.boolean().optional().describe("Superscript"),
-        subscript: z.boolean().optional().describe("Subscript"),
+        highlightColor: ColorSchema.optional().describe("Highlight (marker) color"),
+        superscript: z.boolean().optional().describe("Superscript (e.g., for footnotes or exponents)"),
+        subscript: z.boolean().optional().describe("Subscript (e.g., for chemical formulas)"),
       },
     },
     async (args) => {
@@ -48,16 +48,16 @@ export function registerFormattingTools(
 
   regTool("word_set_paragraph",
     {
-      description: "Set paragraph formatting. WHEN: cursor is in the paragraph to format. NOT: apply to selected text only? use word_set_font instead.",
+      description: "WHEN: need to adjust paragraph layout (alignment, indentation, line spacing, spacing before/after). WHAT: sets formatting for the current paragraph(s). CONSTRAINT: applies to the paragraph containing the cursor. For document-wide defaults, configure Normal style via word_stream_start baseStyleProfile.",
       inputSchema: {
         alignment: z.enum(["left", "center", "right", "justify"]).optional().describe("Paragraph alignment"),
-        leftIndent: z.number().min(-100).max(100).optional().describe("Left indent in cm"),
+        leftIndent: z.number().min(-100).max(100).optional().describe("Left indent in cm (negative values for outdenting/hanging)"),
         rightIndent: z.number().min(-100).max(100).optional().describe("Right indent in cm"),
-        firstLineIndent: z.number().min(-100).max(100).optional().describe("First line indent in cm"),
-        spaceBefore: z.number().min(0).max(1584).optional().describe("Space before paragraph in pts"),
-        spaceAfter: z.number().min(0).max(1584).optional().describe("Space after paragraph in pts"),
-        lineSpacing: z.number().min(0).max(1584).optional().describe("Line spacing in pts"),
-        lineSpacingRule: z.enum(["single", "one_point_five", "double", "at_least", "exactly", "multiple"]).optional().describe("Line spacing rule"),
+        firstLineIndent: z.number().min(-100).max(100).optional().describe("First line indent in cm (e.g., 0.74 ≈ 2 Chinese characters at 12pt)"),
+        spaceBefore: z.number().min(0).max(1584).optional().describe("Space before paragraph in points (12pt ≈ one blank line)"),
+        spaceAfter: z.number().min(0).max(1584).optional().describe("Space after paragraph in points"),
+        lineSpacing: z.number().min(0).max(1584).optional().describe("Line spacing value. With 'multiple' rule: 1.5=1.5x, 2=double. With 'exactly': value in points."),
+        lineSpacingRule: z.enum(["single", "one_point_five", "double", "at_least", "exactly", "multiple"]).optional().describe("Line spacing rule: 'single'=default, 'multiple'=multiplier in lineSpacing, 'exactly'=fixed pts"),
       },
     },
     async (args) => {
@@ -75,9 +75,9 @@ export function registerFormattingTools(
 
   regTool("word_apply_style",
     {
-      description: "Apply a named style to the current paragraph or selection. WHEN: need to apply Word's built-in styles (Heading 1, Title, Normal, etc.) to content. NOT: want to set individual font properties? use word_set_font.",
+      description: "WHEN: need to apply Word's built-in paragraph styles (Heading 1, Title, Normal, etc.) to content. WHAT: sets the paragraph style of the current selection or cursor position. CONSTRAINT: only built-in styles work; custom styles created in Word are not listed. For individual font/paragraph properties, use word_set_font or word_set_paragraph.",
       inputSchema: {
-        styleName: z.string().min(1).max(255).describe("Style name (e.g. 'Heading 1', 'Normal', 'Title')"),
+        styleName: z.string().min(1).max(255).describe("Style name (e.g. 'Heading 1', 'Heading 2', 'Normal', 'Title', 'Subtitle', 'Quote')"),
       },
     },
     async ({ styleName }) => {
@@ -88,15 +88,15 @@ export function registerFormattingTools(
 
   regTool("word_set_page_setup",
     {
-      description: "Set page layout options. WHEN: before typing content to ensure correct layout. NOT: already typed content? margins apply to current section only.",
+      description: "WHEN: need to set page dimensions, margins, or orientation before/after writing content. WHAT: configures page layout for the current section (margins, paper size, orientation). CONSTRAINT: margins apply to current section only; use word_insert_section_break first for different layouts per section.",
       inputSchema: {
-        topMargin: z.number().min(0).max(100).optional().describe("Top margin in cm"),
+        topMargin: z.number().min(0).max(100).optional().describe("Top margin in cm (default: 2.54cm / 1 inch)"),
         bottomMargin: z.number().min(0).max(100).optional().describe("Bottom margin in cm"),
         leftMargin: z.number().min(0).max(100).optional().describe("Left margin in cm"),
         rightMargin: z.number().min(0).max(100).optional().describe("Right margin in cm"),
-        orientation: z.enum(["portrait", "landscape"]).optional().describe("Page orientation"),
-        pageWidth: z.number().min(5).max(100).optional().describe("Page width in cm"),
-        pageHeight: z.number().min(5).max(100).optional().describe("Page height in cm"),
+        orientation: z.enum(["portrait", "landscape"]).optional().describe("Page orientation: portrait (vertical) or landscape (horizontal)"),
+        pageWidth: z.number().min(5).max(100).optional().describe("Page width in cm (default: 21cm for A4 portrait)"),
+        pageHeight: z.number().min(5).max(100).optional().describe("Page height in cm (default: 29.7cm for A4)"),
       },
     },
     async (args) => {
@@ -113,14 +113,14 @@ export function registerFormattingTools(
 
   regTool("word_set_properties",
     {
-      description: "Set document metadata properties (title, author, keywords, subject, comments). WHEN: need to fill in document metadata for search/filing purposes. NOT: want to set page layout or margins? use word_set_page_setup.",
+      description: "WHEN: need to fill in document metadata for search/filing/organization purposes. WHAT: sets document-level properties (title, author, subject, keywords, comments, category). CONSTRAINT: metadata is embedded in the .docx file; visible in File > Info. Does NOT affect visible document content.",
       inputSchema: {
-        title: z.string().max(255).optional().describe("Document title"),
+        title: z.string().max(255).optional().describe("Document title (appears in file properties, search results)"),
         author: z.string().max(255).optional().describe("Author name"),
-        subject: z.string().max(255).optional().describe("Subject"),
-        keywords: z.string().max(1000).optional().describe("Keywords (comma separated)"),
-        comments: z.string().max(5000).optional().describe("Comments/description"),
-        category: z.string().max(255).optional().describe("Category"),
+        subject: z.string().max(255).optional().describe("Subject or category description"),
+        keywords: z.string().max(1000).optional().describe("Keywords for search (comma-separated, e.g., 'report, Q3, financial')"),
+        comments: z.string().max(5000).optional().describe("Comments/description for the document"),
+        category: z.string().max(255).optional().describe("Category (e.g., 'Report', 'Proposal', 'Invoice')"),
       },
     },
     async (args) => {
@@ -134,7 +134,7 @@ export function registerFormattingTools(
 
   regTool("word_list_styles",
     {
-      description: "List all in-use styles in the current document. WHEN: need to see what styles are available before applying one. NOT: want to apply a style you already know? use word_apply_style directly.",
+      description: "WHEN: need to see what styles are available in the document before applying one. WHAT: lists all in-use styles (both built-in and custom) with their type. CONSTRAINT: read-only; does not modify document. Use before word_apply_style to discover available style names.",
     },
     async () => {
       const styles = await formatter.listStyles()
@@ -145,9 +145,9 @@ export function registerFormattingTools(
 
   regTool("word_set_body_indent",
     {
-      description: "Apply first-line indent to all 'Normal' style paragraphs. WHEN: formatting a Chinese academic paper where each body paragraph needs standard 2-char indent. NOT: want to set paragraph spacing or alignment? use word_set_paragraph.",
+      description: "WHEN: formatting a document (especially Chinese academic papers) where each body paragraph needs standard first-line indent. WHAT: applies first-line indent to all paragraphs using the 'Normal' style. CONSTRAINT: only affects 'Normal' style paragraphs; explicitly-formatted paragraphs are skipped. For individual paragraphs, use word_set_paragraph({firstLineIndent:...}).",
       inputSchema: {
-        indent: z.number().min(0).max(10).describe("First line indent in characters (e.g. 0.74cm ≈ 2 chars for 12pt font). Default: 0.74"),
+        indent: z.number().min(0).max(10).describe("First line indent in cm. For Chinese 12pt font: 0.74cm ≈ 2 characters. For English 12pt: ~1.27cm ≈ 5 spaces."),
       },
     },
     async ({ indent }) => {
@@ -159,9 +159,9 @@ export function registerFormattingTools(
 
   regTool("word_set_track_changes",
     {
-      description: "Enable or disable Word's Track Changes (revision marking). WHEN: before making edits that need to be reviewed later. NOT: to accept/reject changes, use word_track_changes_apply({action:\"accept\"}) or word_track_changes_apply({action:\"reject\"}).",
+      description: "WHEN: before making edits that need to be reviewed later in a collaborative workflow. WHAT: enables or disables Word's Track Changes (revision marking). CONSTRAINT: when enabled, all insertions/deletions are marked in red/underline for review. To finalize (accept/reject all changes), use word_track_changes_apply.",
       inputSchema: {
-        enable: z.boolean().describe("true to enable track changes, false to disable"),
+        enable: z.boolean().describe("true to enable track changes (revisions recorded), false to disable (edits apply directly)"),
       },
     },
     async ({ enable }) => {
@@ -172,9 +172,9 @@ export function registerFormattingTools(
 
   regTool("word_track_changes_apply",
     {
-      description: "Accept or reject all tracked changes in the document. WHEN: finished reviewing and want to finalize the document. NOT: want to start tracking new edits? use word_set_track_changes.",
+      description: "WHEN: finished reviewing tracked changes and want to finalize the document. WHAT: action=accept applies all revisions; action=reject discards all revisions and reverts to original text. CONSTRAINT: affects ALL tracked changes at once; there is no per-change selection. Cannot be undone after word_save.",
       inputSchema: {
-        action: z.enum(["accept", "reject"]).describe("'accept' to apply all changes, 'reject' to discard all changes"),
+        action: z.enum(["accept", "reject"]).describe("'accept' to apply all tracked changes into final text, 'reject' to discard all changes and revert to original"),
       },
     },
     async ({ action }) => {

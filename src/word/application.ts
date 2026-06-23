@@ -203,7 +203,7 @@ export class WordApplicationManager {
 
   async createDocument(params?: { title?: string; author?: string }): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
-    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
+    try { ;(w as any).Visible = true } catch (e) { this.session.logger?.warn({ err: e }, "Visible=true failed") }
     const doc = this.session.comCall(() => {
       const docs = w.Documents as { Add: () => Record<string, unknown> }
       return docs.Add() as Record<string, unknown>
@@ -234,7 +234,7 @@ export class WordApplicationManager {
     params?: { title?: string; author?: string },
   ): Promise<{ name: string; fullName: string }> {
     const w = this.getWord()
-    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
+    try { ;(w as any).Visible = true } catch (e) { this.session.logger?.warn({ err: e }, "Visible=true failed") }
     const doc = this.session.comCall(() => {
       const docs = w.Documents as { Add: (t: string) => Record<string, unknown> }
       return docs.Add(templatePath) as Record<string, unknown>
@@ -270,7 +270,7 @@ export class WordApplicationManager {
       }
     }
     const w = this.getWord()
-    try { ;(w as any).Visible = true } catch (e) { console.error("[WordApplicationManager] Visible=true failed:", e) }
+    try { ;(w as any).Visible = true } catch (e) { this.session.logger?.warn({ err: e }, "Visible=true failed") }
     try { ;(w as Record<string, unknown>).FileValidation = 2 } catch { /* some Word versions lack this */ }
     const doc = this.session.comCall(() => {
       const docs = w.Documents as { Open: (p: string) => Record<string, unknown> }
@@ -293,7 +293,7 @@ export class WordApplicationManager {
         if (existsSync(tempPath)) {
           copyFileSync(tempPath, bakPath)
         }
-      } catch (e) { console.error("[saveDocument] backup failed:", e) }
+      } catch (e) { this.session.logger?.warn({ err: e }, "backup failed") }
       this.session.comCall(() => { ;(doc.SaveAs as (p: string, f: number) => void)(tempPath, 16) })
       this.session.setActiveDoc(doc)
       this.session.setActiveDocPath(tempPath)
@@ -304,7 +304,7 @@ export class WordApplicationManager {
         if (existsSync(origPath)) {
           copyFileSync(origPath, bakPath)
         }
-      } catch (e) { console.error("[saveDocument] backup failed:", e) }
+      } catch (e) { this.session.logger?.warn({ err: e }, "backup failed") }
       this.session.comCall(() => { ;(doc.Save as () => void)() })
       this.session.setActiveDocPath(doc.FullName as string)
     }
@@ -318,7 +318,7 @@ export class WordApplicationManager {
       if (existsSync(path)) {
         copyFileSync(path, bakPath)
       }
-    } catch (e) { console.error("[saveDocumentAs] backup failed:", e) }
+    } catch (e) { this.session.logger?.warn({ err: e }, "backup failed") }
     this.session.comCall(() => { ;(doc.SaveAs as (p: string, f: number) => void)(path, f) })
     this.session.setActiveDoc(doc)
     this.session.setActiveDocPath(path)

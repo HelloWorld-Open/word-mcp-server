@@ -14,7 +14,7 @@ export function registerContentTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_insert_paragraph",
     {
-      description: "Insert one or more paragraph breaks at the cursor position. WHEN: need to add spacing or move to a new line. NOT: want to insert content instead of blank lines? use word_stream_block or word_insert_at.",
+      description: "WHEN: need to add spacing or move to a new line. WHAT: inserts N paragraph breaks (blank lines) at the cursor position. CONSTRAINT: max 100 breaks. For rich content (headings, lists, tables) use word_stream_block or word_insert_at instead.",
       inputSchema: {
         count: z.number().int().min(1).max(100).optional().describe("Number of paragraph breaks (default: 1)"),
       },
@@ -28,9 +28,9 @@ export function registerContentTools(
 
   regTool("word_insert_break",
     {
-      description: "Insert a page break or horizontal line at the cursor position. WHEN: need to force a page break or add a visual separator. NOT: want to insert a section break? use word_insert_section_break.",
+      description: "WHEN: need to force a page break or add a horizontal line separator. WHAT: type=page inserts a page break (content continues on next page); type=line inserts a horizontal rule line. CONSTRAINT: page break changes pagination. For section breaks (different margins/orientation) use word_insert_section_break.",
       inputSchema: {
-        type: z.enum(["page", "line"]).describe("'page' for page break, 'line' for horizontal rule"),
+        type: z.enum(["page", "line"]).describe("'page' for a page break (new page), 'line' for a horizontal rule (thematic break)"),
       },
     },
     async ({ type }) => {
@@ -45,10 +45,10 @@ export function registerContentTools(
 
   regTool("word_insert_list",
     {
-      description: "Insert a bulleted or numbered list at the cursor position. WHEN: need to create a structured list. NOT: want rich markdown content including lists with other elements? use word_stream_block instead.",
+      description: "WHEN: need to create a structured bulleted or numbered list. WHAT: inserts a multi-item list at the cursor position. CONSTRAINT: supports bullet or numbered types only (no checkboxes). For rich markdown content (lists with headings/tables), use word_stream_block instead.",
       inputSchema: {
-        type: z.enum(["bullet", "number"]).describe("List type: 'bullet' or 'number'"),
-        items: z.array(z.string().max(100000)).min(1).max(500).describe("List items"),
+        type: z.enum(["bullet", "number"]).describe("List type: 'bullet' for unordered (•), 'number' for ordered (1. 2. 3.)"),
+        items: z.array(z.string().max(100000)).min(1).max(500).describe("List items as plain text strings. Each item becomes one list entry."),
       },
     },
     async ({ type, items }) => {
@@ -59,12 +59,12 @@ export function registerContentTools(
 
   regTool("word_add_hyperlink",
     {
-      description: "Add a hyperlink at the current cursor position. WHEN: need to insert a clickable link to a URL or document location. NOT: want to insert a bookmark anchor for internal navigation? use word_add_bookmark.",
+      description: "WHEN: need to insert a clickable link to a URL or document location. WHAT: inserts hyperlink at cursor with display text and target address. CONSTRAINT: address must be a valid URL or file path; subAddress links to a bookmark within a document (requires existing bookmark via word_add_bookmark).",
       inputSchema: {
-        text: z.string().min(1).max(1000).describe("Display text"),
-        address: z.string().min(1).max(2083).describe("URL or file path"),
-        subAddress: z.string().max(255).optional().describe("Anchor or bookmark within the document"),
-        screenTip: z.string().max(500).optional().describe("Tooltip on hover"),
+        text: z.string().min(1).max(1000).describe("Display text (visible clickable text in the document)"),
+        address: z.string().min(1).max(2083).describe("URL (e.g., 'https://example.com') or file path (e.g., 'C:\\docs\\file.docx')"),
+        subAddress: z.string().max(255).optional().describe("Anchor or bookmark name within the target document to link to a specific location"),
+        screenTip: z.string().max(500).optional().describe("Tooltip text shown on hover (default: the address)"),
         quiet: z.boolean().optional().describe("简洁输出模式"),
       },
     },
@@ -77,9 +77,9 @@ export function registerContentTools(
 
   regTool("word_add_footnote",
     {
-      description: "Add a footnote at the current cursor position. WHEN: need to add an explanatory note at the bottom of the page. NOT: want to add a comment (not printed in layout)? use word_add_comment.",
+      description: "WHEN: need to add an explanatory note at the bottom of the page. WHAT: inserts a footnote at the cursor position and places the cursor inside the footnote area to type content. CONSTRAINT: footnotes appear at page bottom in print layout; for review notes visible in the Review pane, use word_add_comment instead.",
       inputSchema: {
-        text: z.string().min(1).max(10000).describe("Footnote text"),
+        text: z.string().min(1).max(10000).describe("Footnote text (appears at the bottom of the page)"),
         quiet: z.boolean().optional().describe("简洁输出模式"),
       },
     },
@@ -93,9 +93,9 @@ export function registerContentTools(
 
   regTool("word_insert_section_break",
     {
-      description: "Insert a section break at the cursor position. WHEN: need to change page layout (margins, orientation, columns) within the same document. NOT: just want a page break? use word_insert_break with type:'page'.",
+      description: "WHEN: need to change page layout (margins, orientation, columns) within the same document. WHAT: inserts a section divider that allows different formatting per section. CONSTRAINT: type=nextPage starts new section on next page; type=continuous starts on same page. After insertion, page setup settings apply to the new section only.",
       inputSchema: {
-        type: z.enum(["nextPage", "continuous", "evenPage", "oddPage"]).optional().describe("Section break type (default: nextPage)"),
+        type: z.enum(["nextPage", "continuous", "evenPage", "oddPage"]).optional().describe("Section break type (default: nextPage). nextPage=new section on next page, continuous=same page, evenPage/oddPage=start on even/odd numbered page"),
         quiet: z.boolean().optional().describe("简洁输出模式"),
       },
     },
@@ -115,10 +115,10 @@ export function registerContentTools(
 
   regTool("word_set_columns",
     {
-      description: "Set the number of text columns for the current section. WHEN: need newspaper-style multi-column layout. NOT: want to change page margins or orientation? use word_set_page_setup.",
+      description: "WHEN: need newspaper-style multi-column text layout (like a newsletter). WHAT: sets the current section to N columns with optional spacing. CONSTRAINT: applies to current section only; use word_insert_section_break first to create separate sections with different column counts.",
       inputSchema: {
-        count: z.number().int().min(1).max(4).describe("Number of columns (1-4)"),
-        spacing: z.number().min(0).max(20).optional().describe("Space between columns in cm"),
+        count: z.number().int().min(1).max(4).describe("Number of columns (1-4). 1=single column (normal), 2=newspaper style, 3-4=narrower columns"),
+        spacing: z.number().min(0).max(20).optional().describe("Space between columns in cm (default: document default, typically 1.27cm)"),
       },
     },
     async ({ count, spacing }) => {

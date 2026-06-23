@@ -34,10 +34,11 @@ function tableContext(opts?: { tableEnd?: number; docEnd?: number }) {
   })
 
   const tableRangeSelect = vi.fn()
+  const tableNextRange = { Start: tableEnd + 1 }
   rawSel.Tables = {
     Count: 1,
     Item: vi.fn(() => ({
-      Range: { End: tableEnd, Start: 0, Select: tableRangeSelect },
+      Range: { End: tableEnd, Start: 0, Select: tableRangeSelect, Next: vi.fn(() => tableNextRange) },
     })),
   }
 
@@ -52,7 +53,7 @@ function tableContext(opts?: { tableEnd?: number; docEnd?: number }) {
   }) as () => boolean)
   selProxy.getTables = vi.fn(() => ({
     Item: vi.fn(() => ({
-      Range: { End: tableEnd, Start: 0, Select: tableRangeSelect },
+      Range: { End: tableEnd, Start: 0, Select: tableRangeSelect, Next: vi.fn(() => tableNextRange) },
     })),
   }))
   selProxy.getShapeRange = vi.fn(() => ({ Count: 0 }))
@@ -77,8 +78,8 @@ describe("ContextSanitizer.ensureMainBody — table escape", () => {
     const ctx = tableContext({ tableEnd: 50, docEnd: 100 })
     const sanitizer = new ContextSanitizer(ctx.session)
     sanitizer.ensureMainBody()
-    // Should call doc.getRange(50, 50) (min of tableEnd=50, docEnd=100)
-    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(50, 50)
+    // Should call doc.getRange(51, 51) (Next().Start = tableEnd+1 = 51)
+    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(51, 51)
     expect(ctx.selProxy.collapse).toHaveBeenCalledWith(0)
   })
 
@@ -86,8 +87,8 @@ describe("ContextSanitizer.ensureMainBody — table escape", () => {
     const ctx = tableContext({ tableEnd: 200, docEnd: 80 })
     const sanitizer = new ContextSanitizer(ctx.session)
     sanitizer.ensureMainBody()
-    // min(200, 80) = 80
-    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(80, 80)
+    // Next().Start = tableEnd+1 = 201 (not capped by docEnd — InsertParagraph fallback creates space)
+    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(201, 201)
   })
 
   it("does NOT call the old table.Range.Select() + collapse approach", () => {
@@ -119,8 +120,8 @@ describe("ContextSanitizer.ensureMainBody — table escape", () => {
     const ctx = tableContext({ tableEnd: 100, docEnd: 100 })
     const sanitizer = new ContextSanitizer(ctx.session)
     sanitizer.ensureMainBody()
-    // min(100, 100) = 100
-    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(100, 100)
+    // Next().Start = tableEnd+1 = 101
+    expect(ctx.docProxy.getRange).toHaveBeenCalledWith(101, 101)
     expect(ctx.selProxy.collapse).toHaveBeenCalledWith(0)
   })
 

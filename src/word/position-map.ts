@@ -84,7 +84,7 @@ export class PositionMap {
         try {
           await this.refresh()
         } catch (e) {
-          console.warn(`[PositionMap] refresh failed (attempt ${attempts}/${MAX_ATTEMPTS})`, e)
+          this.session.logger?.warn(`[PositionMap] refresh failed (attempt ${attempts}/${MAX_ATTEMPTS})`)
           this.dirty = true
           if (attempts >= MAX_ATTEMPTS) {
             this.dirty = false

@@ -27,7 +27,7 @@ export function registerBatchTools(
   const regTool = createRegTool(server, security, context)
   regTool("word_batch_ops",
     {
-      description: "批量执行多个文档写入操作。Batch-execute multiple document write operations in a single pass with automatic DOM consistency checking, 5-10x faster than sequential word_insert_at calls. WHEN: need to perform multiple insert operations at different document locations efficiently. NOT: single operation? use word_insert_at.",
+      description: "WHEN: need to perform multiple document insert operations at different locations in one pass for 5-10x speedup. WHAT: batch-executes markdown insert operations (by heading/paragraph/table/bookmark/cursor) with automatic DOM consistency checking between operations. CONSTRAINT: max 50 operations per call. For a single operation, use word_insert_at which has simpler error reporting.",
       inputSchema: {
         ops: z.array(batchOp).min(1).max(50).describe("操作列表，按文档顺序排列"),
       },

@@ -48,6 +48,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "pino": "^10.3.1",
     "winax": "^3.6.9",
     "zod": "^3.23.8"
   },

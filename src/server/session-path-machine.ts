@@ -1,3 +1,5 @@
+import type { ILogger } from "../logger.js"
+
 export type SessionPath = "idle" | "streaming" | "editing"
 
 const STREAMING_WATCHDOG_MS = 600_000
@@ -5,14 +7,17 @@ const STREAMING_WATCHDOG_MS = 600_000
 export class SessionPathMachine {
   private _currentPath: SessionPath = "idle"
   private _streamingWatchdog: ReturnType<typeof setTimeout> | null = null
-  private _onLog: ((level: string, message: string) => void) | null = null
+  private _logger: ILogger | null = null
 
-  setOnLog(handler: (level: string, message: string) => void): void {
-    this._onLog = handler
+  setLogger(logger: ILogger): void {
+    this._logger = logger
   }
 
   private _log(level: string, message: string): void {
-    this._onLog?.(level, message)
+    if (level === "error") this._logger?.error(message)
+    else if (level === "warn") this._logger?.warn(message)
+    else if (level === "debug") this._logger?.debug(message)
+    else this._logger?.info(message)
   }
 
   get isStreamingActive(): boolean {
